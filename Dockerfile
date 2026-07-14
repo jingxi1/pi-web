@@ -30,10 +30,13 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENV PI_CODING_AGENT_DIR=/data/pi-agent
 # 代码工作区目录
 ENV WORKSPACE_DIR=/workspace
+# 让 os.homedir() 指向固定路径，"使用默认目录" 按钮的落点 = $HOME/pi-cwd-YYYYMMDD
+# 在 docker-compose 里把这个目录挂到 host 即可跨容器重启保留
+ENV HOME=/home/pi
 ENV PORT=30141
 ENV HOSTNAME=0.0.0.0
 
-RUN mkdir -p /data/pi-agent /workspace
+RUN mkdir -p /data/pi-agent /workspace /home/pi
 
 EXPOSE 30141
 
