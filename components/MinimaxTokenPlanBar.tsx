@@ -153,7 +153,7 @@ export function MinimaxTokenPlanBar({ enabled }: Props) {
           title="5-hour interval quota"
         >
           <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>5h</span>
-          {categories.map((c) => <CategoryChip key={c.name} cat={c} kind="interval" />)}
+          {categories.filter((c) => c.name !== "video").map((c) => <CategoryChip key={c.name} cat={c} kind="interval" />)}
         </span>
         <span
           style={{
@@ -164,7 +164,7 @@ export function MinimaxTokenPlanBar({ enabled }: Props) {
           title="Weekly quota"
         >
           <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>wk</span>
-          {categories.map((c) => <CategoryChip key={c.name} cat={c} kind="weekly" />)}
+          {categories.filter((c) => c.name !== "video").map((c) => <CategoryChip key={c.name} cat={c} kind="weekly" />)}
         </span>
       </span>
     );
