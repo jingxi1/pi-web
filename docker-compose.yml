@@ -1,0 +1,31 @@
+# pi-web — 生产部署（从 Harbor 拉取镜像）
+# 使用前：docker login harbor.192.168.9.220.nip.io
+# 启动：docker compose up -d
+#
+# 镜像地址：harbor.192.168.9.220.nip.io/library/pi-web
+# 架构：linux/amd64
+# 版本：0.7.11
+#
+# 数据目录会在首次启动时自动创建：
+#   ./data/pi-agent  — pi agent 数据（会话、模型配置、notify.json）
+#   ./workspace      — 代码工作区
+
+services:
+  pi-web:
+    image: harbor.192.168.9.220.nip.io/library/pi-web:0.7.11
+    platform: linux/amd64
+    container_name: pi-web
+    ports:
+      - "30141:30141"
+    volumes:
+      # pi agent 数据 —— 挂载到运行目录下的 ./data/pi-agent
+      - ./data/pi-agent:/data/pi-agent
+      # 代码工作区 —— 挂载到运行目录下的 ./workspace
+      - ./workspace:/workspace
+    environment:
+      # 可选：首次启动时自动 git clone 到 /workspace（留空则手动 docker exec clone）
+      # GIT_REPO_URL: "https://github.com/your/repo.git"
+      - PI_CODING_AGENT_DIR=/data/pi-agent
+      - PORT=30141
+      - HOSTNAME=0.0.0.0
+    restart: unless-stopped

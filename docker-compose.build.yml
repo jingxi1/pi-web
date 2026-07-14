@@ -1,0 +1,26 @@
+# pi-web — 本地构建开发用
+# 构建并启动：docker compose -f docker-compose.build.yml up -d --build
+# 注意：在 macOS arm64 上构建 amd64 镜像需要 Docker Desktop/OrbStack + buildx
+#
+# 数据目录会在首次启动时自动创建：
+#   ./data/pi-agent  — pi agent 数据（会话、模型配置、notify.json）
+#   ./workspace      — 代码工作区
+
+services:
+  pi-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    container_name: pi-web-dev
+    ports:
+      - "30141:30141"
+    volumes:
+      - ./data/pi-agent:/data/pi-agent
+      - ./workspace:/workspace
+    environment:
+      # GIT_REPO_URL: "https://github.com/your/repo.git"
+      - PI_CODING_AGENT_DIR=/data/pi-agent
+      - PORT=30141
+      - HOSTNAME=0.0.0.0
+    restart: unless-stopped
