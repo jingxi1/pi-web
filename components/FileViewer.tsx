@@ -213,9 +213,24 @@ function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceS
     <a
       href={getFileApiUrl(filePath, "download", sourceSessionId)}
       download={getFileName(filePath)}
-      title={t("i18n.downloadFile")}
+title={t("i18n.downloadFile")}
       aria-label={t("i18n.downloadFile")}
-      className="file-viewer-icon-button"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: 28,
+        minWidth: 44,
+        minHeight: 44,
+        padding: "0 8px",
+        background: "var(--bg-panel)",
+        border: "1px solid var(--border)",
+        borderRadius: 4,
+        color: "var(--text-muted)",
+        cursor: "pointer",
+        flexShrink: 0,
+        textDecoration: "none",
+      }}
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -465,6 +480,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
           alignItems: "center",
           gap: 12,
           padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -599,6 +615,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
           alignItems: "center",
           gap: 12,
           padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -734,6 +751,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
           alignItems: "center",
           gap: 12,
           padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -1034,8 +1052,9 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          padding: "5px 12px",
+gap: 12,
+          padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",

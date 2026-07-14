@@ -310,7 +310,7 @@ function AddPluginPanel({
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 660, minHeight: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: "min(660px, calc(100vw - 32px))", minHeight: "100%" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>
           {t("i18n.addPlugin")}

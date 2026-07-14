@@ -198,7 +198,7 @@ export function NotifyConfig({ onClose }: { onClose: () => void }) {
           background: "var(--bg-panel)",
           borderRadius: 10,
           width: isMobile ? "92vw" : 520,
-          maxHeight: isMobile ? "92vh" : "80vh",
+          maxHeight: isMobile ? "92dvh" : "80vh",
           display: "flex",
           flexDirection: "column",
           boxShadow: "0 24px 48px rgba(0,0,0,0.25)",
