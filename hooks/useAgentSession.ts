@@ -13,6 +13,8 @@ import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import { emitNotifyEvent } from "@/lib/notify-emitter";
+import { isQuotaError } from "@/lib/quota-error";
+import { autoResumeStore } from "@/lib/auto-resume-store";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
 export interface SessionData {
@@ -373,6 +375,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const completionScrollAllowedRef = useRef(true);
   const userScrollIntentUntilRef = useRef(0);
   const ignoreProgrammaticScrollUntilRef = useRef(0);
+  // Last user-sent prompt for this session — used by the quota auto-resume
+  // path to replay the message when the upstream token bucket resets.
+  const lastPromptRef = useRef<string>("");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const ensuringNewSessionRef = useRef<Promise<string | null> | null>(null);
@@ -902,6 +907,42 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           sessionName: session?.name ?? null,
           summary: errMsg,
         });
+        // Schedule auto-resume if this is a quota/billing error and the current
+        // session has a stored prompt we can replay after the token bucket
+        // resets. Other (retryable) errors fall through to the SDK's own
+        // retry path which already handles 429/5xx/network in seconds.
+        if (isQuotaError(errMsg)) {
+          const sid = sessionIdRef.current;
+          const providerId = displayModel?.provider ?? null;
+          const lastPrompt = lastPromptRef.current;
+          if (sid && providerId && lastPrompt) {
+            void fetch(`/api/token-plan/${providerId}`, { cache: "no-store" })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((body: { categories?: Array<{ name: string; intervalPercent: number; available: boolean; intervalResetsIn: string }> } | null) => {
+                if (!body?.categories) return;
+                const general = body.categories.find((c) => c.name === "general");
+                const secsFromString = (s: string): number => {
+                  const m = s.match(/^(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?$/);
+                  if (!m) return 0;
+                  const [, d, h, mm] = m;
+                  return (Number(d) || 0) * 86400 + (Number(h) || 0) * 3600 + (Number(mm) || 0) * 60;
+                };
+                const resetSec = general ? secsFromString(general.intervalResetsIn) : 0;
+                const wakesAt = Date.now() + (resetSec > 0 ? resetSec * 1000 : 30 * 60 * 1000);
+                autoResumeStore.schedule({ sessionId: sid, providerId, lastPrompt, wakesAt, createdAt: Date.now() });
+              })
+              .catch(() => {
+                // Fallback: schedule 30 min ahead if token-plan endpoint fails.
+                autoResumeStore.schedule({
+                  sessionId: sid,
+                  providerId,
+                  lastPrompt,
+                  wakesAt: Date.now() + 30 * 60 * 1000,
+                  createdAt: Date.now(),
+                });
+              });
+          }
+        }
         break;
       }
       case "extension_error":
@@ -1036,6 +1077,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
     if (agentRunning) return;
+    // User is taking over manually — clear any pending auto-resume for this
+    // session so we don't double-fire later.
+    const sidForCancel = sessionIdRef.current;
+    if (sidForCancel) autoResumeStore.cancel(sidForCancel);
+    lastPromptRef.current = trimmedMessage;
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
     const promptRunId = promptRunIdRef.current + 1;
 
@@ -1115,6 +1161,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       dispatch({ type: "end" });
     }
   }, [isNew, newSessionCwd, newSessionModel, session, agentRunning, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice]);
+
+  // Re-send the last user prompt for this session if an auto-resume schedule
+  // exists. Called by the auto-resume store when the quota token bucket resets.
+  const triggerResume = useCallback(async (sessionId: string, prompt: string) => {
+    if (sessionIdRef.current !== sessionId) return;
+    if (agentRunningRef.current) return;
+    if (!prompt) return;
+    await handleSend(prompt);
+  }, [handleSend]);
 
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1547,6 +1602,30 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return () => clearTimeout(t);
   }, [compactResult]);
 
+  // Register this session as the auto-resume target for its current provider.
+  // When the token-plan polling hook detects a reset, the store fires entries
+  // for that provider and our handler triggers a re-send for the matching one.
+  // The active session resumes locally via triggerResume; non-active sessions
+  // resume server-side via the existing /api/agent/[id] POST endpoint, which
+  // spins up the agent's RPC session and forwards the prompt without needing
+  // an active SSE listener on this tab. Switching back to such a session
+  // later picks up the in-flight events via SSE reconnection.
+  useEffect(() => {
+    const providerId = displayModel?.provider;
+    if (!providerId) return;
+    return autoResumeStore.registerFireHandler(providerId, (entry) => {
+      if (entry.sessionId === sessionIdRef.current) {
+        void triggerResume(entry.sessionId, entry.lastPrompt);
+        return;
+      }
+      void fetch(`/api/agent/${encodeURIComponent(entry.sessionId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "prompt", message: entry.lastPrompt }),
+      }).catch(() => {});
+    });
+  }, [displayModel?.provider, triggerResume]);
+
   useEffect(() => {
     if (noticeState.visible.length === 0) return;
     const exiting = noticeState.visible.find((notice) => notice.exiting);
@@ -1584,6 +1663,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
+    triggerResume,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,

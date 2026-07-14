@@ -28,6 +28,7 @@ interface Props {
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
   onSessionStatsPanelOpen?: () => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
+  onSelectedModelChange?: (modelId: string, providerId: string) => void;
   onOpenFile?: (filePath: string) => void;
 }
 
@@ -135,7 +136,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onSelectedModelChange, onOpenFile }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
   const breakpoint = useBreakpoint();
@@ -215,6 +216,16 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   }, [ctxKey, onContextUsageChange]);
   useEffect(() => () => { onContextUsageChange?.(null); }, [onContextUsageChange]);
 
+  // Surface the current model's provider id to AppShell (drives MinimaxTokenPlanBar visibility)
+  const selectedModelId = displayModelValue?.modelId ?? "";
+  const selectedProviderId = displayModelValue?.provider ?? "";
+  useEffect(() => {
+    if (selectedModelId && selectedProviderId) {
+      onSelectedModelChange?.(selectedModelId, selectedProviderId);
+    }
+  }, [selectedModelId, selectedProviderId, onSelectedModelChange]);
+  useEffect(() => () => { onSelectedModelChange?.("", ""); }, [onSelectedModelChange]);
+
   const onDrop = useCallback((files: File[]) => {
     if (agentRunning) return;
     chatInputRef?.current?.addImages(files);
@@ -247,6 +258,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
       isStreaming={agentRunning}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
+      sessionId={session?.id ?? sessionIdRef.current ?? undefined}
       modelNames={modelNames}
       modelList={modelList}
       onModelChange={handleModelChange}
