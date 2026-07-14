@@ -12,6 +12,7 @@ import type {
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
+import { emitNotifyEvent } from "@/lib/notify-emitter";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
 export interface SessionData {
@@ -912,14 +913,36 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             .catch(() => {});
         }
         onAgentEnd?.();
+        // === notify: emit agentEnd event ===
+        {
+          const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+          const summary = lastAssistant
+            ? extractMessageText(lastAssistant).slice(0, 200) || "(empty response)"
+            : "Task finished";
+          emitNotifyEvent({
+            type: "agentEnd",
+            sessionId: sessionIdRef.current,
+            sessionName: session?.name ?? null,
+            summary,
+          });
+        }
         break;
       case "prompt_done":
         if (!agentRunningRef.current) break;
         void finishPromptWithoutStream(sessionIdRef.current);
         break;
-      case "prompt_error":
-        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
+      case "prompt_error": {
+        const errMsg = (event.errorMessage as string | undefined) ?? "Command failed";
+        addNotice({ type: "error", message: errMsg });
+        // === notify: emit error event ===
+        emitNotifyEvent({
+          type: "error",
+          sessionId: sessionIdRef.current,
+          sessionName: session?.name ?? null,
+          summary: errMsg,
+        });
         break;
+      }
       case "extension_error":
         addNotice({
           type: "error",
@@ -1022,11 +1045,30 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (sessionIdRef.current) loadSession(sessionIdRef.current);
         }
         break;
-      case "extension_ui_request":
-        handleExtensionUiRequest(event as ExtensionUiRequest);
+      case "extension_ui_request": {
+        const req = event as ExtensionUiRequest;
+        handleExtensionUiRequest(req);
+        // === notify: emit inputNeeded event for user-interactive requests ===
+        if (req.method === "select" || req.method === "confirm" || req.method === "input" || req.method === "editor") {
+          const summary = req.method === "select"
+            ? `${req.title} (select from ${req.options.length} options)`
+            : req.method === "confirm"
+              ? req.title
+              : req.method === "input"
+                ? req.title
+                : req.title;
+          emitNotifyEvent({
+            type: "inputNeeded",
+            sessionId: sessionIdRef.current,
+            sessionName: session?.name ?? null,
+            summary,
+            detail: req.method === "confirm" ? req.message : undefined,
+          });
+        }
         break;
+      }
     }
-  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
+  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, messages, onAgentEnd, session]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
