@@ -16,6 +16,8 @@ import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/hooks/useI18n";
 import { useVisualViewport } from "@/hooks/useVisualViewport";
+import { autoResumeStore, useAutoResumeSchedule } from "@/lib/auto-resume-store";
+import { formatRemainingSeconds } from "@/lib/time-format";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -36,6 +38,7 @@ interface Props {
   onFollowUp?: (message: string, images?: AttachedImage[]) => void;
   onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
   isStreaming: boolean;
+  sessionId?: string;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   modelNames?: Record<string, string>;
@@ -262,7 +265,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, onModelChange,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
-  retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
+retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
+  sessionId,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
   onBuiltinCommand,
   soundEnabled, onSoundToggle, onAudioUnlock,
@@ -291,8 +295,28 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [atQuery, setAtQuery] = useState<AtQueryMatch | null>(null);
   const [atMenuOpen, setAtMenuOpen] = useState(false);
   const [atActiveIndex, setAtActiveIndex] = useState(0);
-  const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
+const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const [historyActiveIndex, setHistoryActiveIndex] = useState(0);
+
+  // Auto-resume countdown for quota-exhausted sessions.
+  const schedule = useAutoResumeSchedule(sessionId);
+  const [resumeCountdownText, setResumeCountdownText] = useState<string>("");
+  useEffect(() => {
+    if (!schedule) {
+      setResumeCountdownText("");
+      return;
+    }
+    const update = () => {
+      const remain = Math.max(0, schedule.wakesAt - Date.now());
+      setResumeCountdownText(formatRemainingSeconds(remain / 1000));
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [schedule]);
+  const handleCancelResume = useCallback(() => {
+    if (sessionId) autoResumeStore.cancel(sessionId);
+  }, [sessionId]);
   const [fileIndex, setFileIndex] = useState<{ cwd: string; entries: FileIndexEntry[]; truncated: boolean } | null>(null);
   const [fileIndexLoading, setFileIndexLoading] = useState(false);
   const [atServerResult, setAtServerResult] = useState<{ cwd: string; query: string; matches: FileIndexEntry[] } | null>(null);
@@ -1143,6 +1167,34 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             {queuedMessages?.followUp.map((text, i) => (
               <QueuedMessageRow key={`followup-${i}`} kind="follow-up" text={text} />
             ))}
+          </div>
+        )}
+        {/* Quota auto-resume countdown banner */}
+        {schedule && resumeCountdownText && (
+          <div style={{
+            marginBottom: 8, padding: "5px 10px",
+            background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.25)",
+            borderRadius: 6, fontSize: 12, color: "rgba(30,80,200,0.95)",
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span style={{ flex: 1 }}>
+              Token quota exhausted — auto-resume in <strong>{resumeCountdownText}</strong>
+            </span>
+            <button
+              type="button"
+              onClick={handleCancelResume}
+              aria-label="Cancel auto-resume"
+              title="Cancel auto-resume"
+              style={{
+                background: "transparent", border: "none", color: "rgba(30,80,200,0.7)",
+                cursor: "pointer", padding: 0, fontSize: 14, lineHeight: 1, display: "flex",
+              }}
+            >
+              ×
+            </button>
           </div>
         )}
         {/* Retry banner */}
