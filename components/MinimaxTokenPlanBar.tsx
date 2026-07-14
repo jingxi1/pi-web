@@ -30,45 +30,33 @@ function formatAge(ms: number, now: number): string {
   return `${Math.floor(min / 60)}h ago`;
 }
 
-function CategoryPill({ cat }: { cat: TokenPlanCategory }) {
-  const pct = cat.intervalPercent;
-  const color = cat.available ? percentColor(pct) : "var(--text-dim)";
+interface BucketData {
+  reset: string;
+  used: number;
+  total: number;
+}
+
+function bucketOf(cat: TokenPlanCategory, kind: "interval" | "weekly"): BucketData {
+  if (kind === "interval") {
+    return { reset: cat.intervalResetsIn, used: cat.intervalUsedPercent, total: cat.intervalTotalPercent };
+  }
+  return { reset: cat.weeklyResetsIn, used: cat.weeklyUsedPercent, total: cat.weeklyTotalPercent };
+}
+
+function CategoryChip({ cat, kind }: { cat: TokenPlanCategory; kind: "interval" | "weekly" }) {
+  const data = bucketOf(cat, kind);
+  const showData = cat.available && data.reset !== "—";
   return (
     <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        height: 22,
-        padding: "0 8px",
-        borderRadius: 11,
-        background: "var(--bg)",
-        border: "1px solid var(--border)",
-        color: "var(--text)",
-        fontSize: 11,
-        fontVariantNumeric: "tabular-nums",
-      }}
-      title={`weekly ${cat.weeklyPercent}%`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontVariantNumeric: "tabular-nums" }}
+      title={`${cat.name} ${kind}: used ${data.used}/${data.total}, resets in ${data.reset}`}
     >
-      <span
-        style={{
-          width: 16,
-          height: 16,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          borderRadius: 8,
-          background: "var(--bg-panel)",
-          color: "var(--text-muted)",
-          fontSize: 10,
-          fontWeight: 600,
-        }}
-      >
-        {categoryChip(cat.name)}
+      <span style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 600 }}>{categoryChip(cat.name)}</span>
+      <span style={{ color: showData ? percentColor(data.total - data.used) : "var(--text-dim)", fontWeight: 600 }}>
+        {showData ? `${data.used}/${data.total}` : "—"}
       </span>
-      <span style={{ color, fontWeight: 600 }}>{cat.available ? `${pct}%` : "—"}</span>
-      {cat.available && cat.intervalResetsIn !== "—" && (
-        <span style={{ color: "var(--text-muted)", fontSize: 10 }}>⟲{cat.intervalResetsIn}</span>
+      {showData && (
+        <span style={{ color: "var(--text-muted)", fontSize: 10 }}>⟲{data.reset}</span>
       )}
     </span>
   );
@@ -129,27 +117,55 @@ export function MinimaxTokenPlanBar({ enabled }: Props) {
   } else if (categories.length === 0) {
     body = null;
   } else if (isCompact) {
-    body = (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-        {categories.map((c) => (
-          <span key={c.name} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-            <span style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 600 }}>{categoryChip(c.name)}</span>
-            <span style={{ color: c.available ? percentColor(c.intervalPercent) : "var(--text-dim)", fontWeight: 600 }}>
-              {c.available ? `${c.intervalPercent}%` : "—"}
+    const general = categories.find((c) => c.name === "general");
+    if (!general) {
+      body = null;
+    } else {
+      body = (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <span style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 600 }}>5h</span>
+            <span style={{ color: general.available ? percentColor(general.intervalTotalPercent - general.intervalUsedPercent) : "var(--text-dim)", fontWeight: 600 }}>
+              {general.available ? `${general.intervalUsedPercent}/${general.intervalTotalPercent}` : "—"}
             </span>
+            {general.intervalResetsIn !== "—" && <span style={{ color: "var(--text-muted)", fontSize: 10 }}>⟲{general.intervalResetsIn}</span>}
           </span>
-        ))}
-      </span>
-    );
+          <span style={{ color: "var(--text-dim)" }}>·</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <span style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 600 }}>wk</span>
+            <span style={{ color: general.available ? percentColor(general.weeklyTotalPercent - general.weeklyUsedPercent) : "var(--text-dim)", fontWeight: 600 }}>
+              {general.available ? `${general.weeklyUsedPercent}/${general.weeklyTotalPercent}` : "—"}
+            </span>
+            {general.weeklyResetsIn !== "—" && <span style={{ color: "var(--text-muted)", fontSize: 10 }}>⟲{general.weeklyResetsIn}</span>}
+          </span>
+        </span>
+      );
+    }
   } else {
     body = (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginRight: 2 }}>
-          quota
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <span
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            height: 24, padding: "0 8px", borderRadius: 6,
+            background: "var(--bg)", border: "1px solid var(--border)",
+          }}
+          title="5-hour interval quota"
+        >
+          <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>5h</span>
+          {categories.map((c) => <CategoryChip key={c.name} cat={c} kind="interval" />)}
         </span>
-        {categories.map((c) => (
-          <CategoryPill key={c.name} cat={c} />
-        ))}
+        <span
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            height: 24, padding: "0 8px", borderRadius: 6,
+            background: "var(--bg)", border: "1px solid var(--border)",
+          }}
+          title="Weekly quota"
+        >
+          <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>wk</span>
+          {categories.map((c) => <CategoryChip key={c.name} cat={c} kind="weekly" />)}
+        </span>
       </span>
     );
   }
