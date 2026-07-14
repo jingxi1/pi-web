@@ -13,12 +13,22 @@ export interface VisualViewportState {
   keyboardHeight: number;
 }
 
-const EMPTY: VisualViewportState = {
+const EMPTY: VisualViewportState = Object.freeze({
   height: 0,
   offsetTop: 0,
   width: 0,
   keyboardHeight: 0,
-};
+}) as VisualViewportState;
+
+// Snapshot cache — useSyncExternalStore requires getSnapshot to return a stable
+// reference between calls when the underlying values haven't changed. Returning
+// a fresh object literal each time triggers React 19's infinite-loop guard and
+// crashes components that consume this hook on every render.
+let cached: VisualViewportState = EMPTY;
+let cachedHeight = -1;
+let cachedOffsetTop = -1;
+let cachedWidth = -1;
+let cachedKeyboard = -1;
 
 function subscribe(cb: () => void): () => void {
   if (typeof window === "undefined" || !window.visualViewport) return () => {};
@@ -34,13 +44,24 @@ function subscribe(cb: () => void): () => void {
 function getSnapshot(): VisualViewportState {
   if (typeof window === "undefined" || !window.visualViewport) return EMPTY;
   const vv = window.visualViewport;
-  const keyboardHeight = Math.max(0, window.innerHeight - vv.height);
-  return {
-    height: vv.height,
-    offsetTop: vv.offsetTop,
-    width: vv.width,
-    keyboardHeight,
-  };
+  const height = vv.height;
+  const offsetTop = vv.offsetTop;
+  const width = vv.width;
+  const keyboardHeight = Math.max(0, window.innerHeight - height);
+  if (
+    height === cachedHeight &&
+    offsetTop === cachedOffsetTop &&
+    width === cachedWidth &&
+    keyboardHeight === cachedKeyboard
+  ) {
+    return cached;
+  }
+  cachedHeight = height;
+  cachedOffsetTop = offsetTop;
+  cachedWidth = width;
+  cachedKeyboard = keyboardHeight;
+  cached = { height, offsetTop, width, keyboardHeight };
+  return cached;
 }
 
 function getServerSnapshot(): VisualViewportState {
