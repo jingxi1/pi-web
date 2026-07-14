@@ -13,7 +13,12 @@ RUN npm run build
 FROM harbor.192.168.9.220.nip.io/library/node:22-bookworm-slim AS runner
 
 # git: pi worktree/branch features need it
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+# 清华源：deb.debian.org 从国内出口被限速到 ~30 KB/s，跑 22 MB apt install 要 20+ 分钟
+# mirrors.tuna.tsinghua.edu.cn 实测 1.6 MB/s，同一 install 40 秒搞定
+RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
