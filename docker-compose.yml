@@ -9,6 +9,7 @@
 # 数据目录会在首次启动时自动创建：
 #   ./data/pi-agent  — pi agent 数据（会话、模型配置、notify.json）
 #   ./workspace      — 代码工作区
+#   ./pi-home        — "使用默认目录" 按钮的落点（容器里 $HOME=/home/pi）
 
 services:
   pi-web:
@@ -22,6 +23,8 @@ services:
       - ./data/pi-agent:/data/pi-agent
       # 代码工作区 —— 挂载到运行目录下的 ./workspace
       - ./workspace:/workspace
+      # "使用默认目录" 落点 —— 容器内 $HOME=/home/pi，host 上对应 ./pi-home
+      - ./pi-home:/home/pi
     environment:
       # 可选：首次启动时自动 git clone 到 /workspace（留空则手动 docker exec clone）
       # GIT_REPO_URL: "https://github.com/your/repo.git"
