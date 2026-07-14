@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo, RefObject } from "react";
 import type { AgentMessage, AssistantMessage, TextContent } from "@/lib/types";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
 
 interface Props {
   messages: AgentMessage[];
@@ -65,6 +66,9 @@ interface NodeInfo {
 }
 
 export function ChatMinimap({ messages, streamingMessage, scrollContainer, messageRefs }: Props) {
+  // Three-tier visibility: full sidebar on desktop, hidden on mobile/tablet
+  // (tablet uses ChatMinimapFab in components/ChatMinimapFab.tsx).
+  const breakpoint = useBreakpoint();
   const [scrollRatio, setScrollRatio] = useState(0);
   const [viewportRatio, setViewportRatio] = useState(1);
   const [visible, setVisible] = useState(false);
@@ -219,6 +223,7 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
     return positions;
   }, [minimapHovered, nodes, minimapHeightPx]);
 
+  if (breakpoint !== "desktop") return null;
   if (!visible) return null;
 
   const viewportBoxTop = scrollRatio * (1 - viewportRatio) * 100;

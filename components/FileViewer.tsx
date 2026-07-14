@@ -49,12 +49,15 @@ function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceS
       href={getFileApiUrl(filePath, "download", sourceSessionId)}
       download={getFileName(filePath)}
       title="Download file"
+      aria-label="Download file"
       style={{
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        height: 20,
-        padding: "0 5px",
+        height: 28,
+        minWidth: 44,
+        minHeight: 44,
+        padding: "0 8px",
         background: "var(--bg-panel)",
         border: "1px solid var(--border)",
         borderRadius: 4,
@@ -362,6 +365,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
           alignItems: "center",
           gap: 12,
           padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -495,6 +499,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
           alignItems: "center",
           gap: 12,
           padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -629,6 +634,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
           alignItems: "center",
           gap: 12,
           padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -808,6 +814,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
           alignItems: "center",
           gap: 12,
           padding: "4px 16px",
+          minHeight: 48,
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
