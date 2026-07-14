@@ -6,7 +6,12 @@ export type TokenPlanCategory = {
   name: string;
   intervalPercent: number;
   intervalResetsIn: string;
+  intervalUsedPercent: number;
+  intervalTotalPercent: number;
   weeklyPercent: number;
+  weeklyResetsIn: string;
+  weeklyUsedPercent: number;
+  weeklyTotalPercent: number;
   available: boolean;
 };
 

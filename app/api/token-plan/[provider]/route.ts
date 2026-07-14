@@ -11,7 +11,9 @@ type UpstreamModel = {
   current_interval_status: number;
   current_weekly_remaining_percent: number;
   current_weekly_status: number;
-  remains_time: number;
+  end_time?: number;
+  weekly_end_time?: number;
+  weekly_boost_permille?: number;
 };
 
 type UpstreamResponse = {
@@ -23,7 +25,12 @@ type Category = {
   name: string;
   intervalPercent: number;
   intervalResetsIn: string;
+  intervalUsedPercent: number;
+  intervalTotalPercent: number;
   weeklyPercent: number;
+  weeklyResetsIn: string;
+  weeklyUsedPercent: number;
+  weeklyTotalPercent: number;
   available: boolean;
 };
 
@@ -38,18 +45,30 @@ const CACHE_TTL_MS = 60_000;
 const cache = new Map<string, { at: number; body: { categories: Category[]; fetchedAt: number } }>();
 
 function normalize(upstream: UpstreamResponse) {
+  const now = Date.now();
   const categories: Category[] = (upstream.model_remains ?? []).map((m) => {
     const intervalAvailable = m.current_interval_status === 1;
     const weeklyAvailable = m.current_weekly_status === 1;
+    const intervalTotal = 100;
+    const weeklyTotal = 100 + Math.floor((m.weekly_boost_permille ?? 0) / 10);
+    const intervalRemaining = m.current_interval_remaining_percent;
+    const weeklyRemaining = m.current_weekly_remaining_percent;
+    const intervalResetSec = m.end_time ? Math.max(0, (m.end_time - now) / 1000) : null;
+    const weeklyResetSec = m.weekly_end_time ? Math.max(0, (m.weekly_end_time - now) / 1000) : null;
     return {
       name: m.model_name,
-      intervalPercent: m.current_interval_remaining_percent,
-      intervalResetsIn: intervalAvailable ? formatRemainingSeconds(m.remains_time) : "—",
-      weeklyPercent: m.current_weekly_remaining_percent,
+      intervalPercent: intervalRemaining,
+      intervalResetsIn: intervalResetSec !== null ? formatRemainingSeconds(intervalResetSec) : "—",
+      intervalUsedPercent: Math.max(0, intervalTotal - intervalRemaining),
+      intervalTotalPercent: intervalTotal,
+      weeklyPercent: weeklyRemaining,
+      weeklyResetsIn: weeklyResetSec !== null ? formatRemainingSeconds(weeklyResetSec) : "—",
+      weeklyUsedPercent: Math.max(0, weeklyTotal - weeklyRemaining),
+      weeklyTotalPercent: weeklyTotal,
       available: intervalAvailable || weeklyAvailable,
     };
   });
-  return { categories, fetchedAt: Date.now() };
+  return { categories, fetchedAt: now };
 }
 
 export async function GET(_req: Request, { params }: Params) {
