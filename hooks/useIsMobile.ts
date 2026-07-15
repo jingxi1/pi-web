@@ -2,8 +2,9 @@
 
 import { useSyncExternalStore } from "react";
 
-// Mobile breakpoint shared with app/globals.css (max-width: 640px).
-const MOBILE_QUERY = "(max-width: 640px)";
+// Mobile breakpoint shared with hooks/useBreakpoint.ts.
+// 768px matches the `useBreakpoint` mobile boundary so the two hooks agree.
+const MOBILE_QUERY = "(max-width: 767px)";
 
 function subscribe(cb: () => void): () => void {
   if (typeof window === "undefined" || !window.matchMedia) return () => {};

@@ -10,6 +10,7 @@ import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { NotifyConfig } from "./NotifyConfig";
+import { ScheduledTasksConfig } from "./ScheduledTasksConfig";
 import { BranchNavigator } from "./BranchNavigator";
 import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
 import { autoResumeStore } from "@/lib/auto-resume-store";
@@ -45,6 +46,7 @@ export function AppShell() {
   const [skillsConfigOpen, setSkillsConfigOpen] = useState(false);
   const [pluginsConfigOpen, setPluginsConfigOpen] = useState(false);
   const [notifyConfigOpen, setNotifyConfigOpen] = useState(false);
+  const [tasksConfigOpen, setTasksConfigOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   // On mobile and tablet the sidebar is an overlay drawer; hide it by default
@@ -408,6 +410,17 @@ export function AppShell() {
               </svg>
             ),
           },
+          {
+            label: "Tasks",
+            onClick: () => setTasksConfigOpen(true),
+            disabled: false,
+            icon: (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+            ),
+          },
         ] as { label: string; onClick: () => void; disabled: boolean; icon: React.ReactNode }[]).map(({ label, onClick, disabled, icon }) => (
           <button
             key={label}
@@ -415,7 +428,7 @@ export function AppShell() {
             disabled={disabled}
             title={label}
             style={{
-              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
               height: 32, padding: 0, background: "none", border: "none",
               borderRadius: 9, color: "var(--text-muted)", cursor: disabled ? "default" : "pointer",
               fontSize: 12, opacity: disabled ? 0.35 : 1,
@@ -425,7 +438,6 @@ export function AppShell() {
             onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
           >
             {icon}
-            {label}
           </button>
         ))}
       </div>
@@ -1107,6 +1119,7 @@ export function AppShell() {
       />
     )}
     {notifyConfigOpen && <NotifyConfig onClose={() => setNotifyConfigOpen(false)} />}
+    {tasksConfigOpen && <ScheduledTasksConfig onClose={() => setTasksConfigOpen(false)} />}
     </>
   );
 }
