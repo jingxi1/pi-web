@@ -180,3 +180,17 @@ export function useAutoResumeList(providerId: string | null | undefined): Stored
   }, [providerId]);
   return list;
 }
+
+// All active schedules across providers — used by the sidebar "Running" panel
+// to surface sessions that are waiting for a quota reset, regardless of which
+// provider's quota they're tied to.
+export function useAllAutoResumeSchedules(): Stored[] {
+  const [list, setList] = useState<Stored[]>(() => autoResumeStore.list());
+  useEffect(() => {
+    setList(autoResumeStore.list());
+    return autoResumeStore.subscribe(() => {
+      setList(autoResumeStore.list());
+    });
+  }, []);
+  return list;
+}
