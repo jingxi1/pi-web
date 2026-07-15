@@ -5,6 +5,7 @@ import type { SessionInfo } from "@/lib/types";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
+import { autoResumeStore, useAllAutoResumeSchedules, type Stored as AutoResumeSchedule } from "@/lib/auto-resume-store";
 
 declare global {
   interface Window {
@@ -416,6 +417,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const [runningPanelOpen, setRunningPanelOpen] = useState(true);
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
@@ -788,6 +790,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const filteredSessions = selectedProject
     ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
     : allSessions;
+  // Running sessions — surfaced in a dedicated "RUNNING" panel regardless of
+  // the current project filter, so the user can always see and jump to agents
+  // that are still working in other worktrees.
+  const runningSessions = allSessions.filter((s) => runningSessionIds.has(s.id));
+  // Quota-stuck sessions — agents that hit a billing/quota error and are
+  // waiting for the provider's interval to reset. The store is shared across
+  // providers, but we drop any session that's already in the running set
+  // (a race between the running SSE and the store update could otherwise
+  // render the same session twice).
+  const allSchedules = useAllAutoResumeSchedules();
+  const waitingSchedules = allSchedules.filter((s) => !runningSessionIds.has(s.sessionId));
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -1471,7 +1484,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       </div>
 
       {/* Session list */}
-      <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+      <div style={{ flex: (explorerOpen && (selectedCwdProp || selectedCwd)) || (runningPanelOpen && (runningSessions.length > 0 || waitingSchedules.length > 0)) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.loading")}
@@ -1504,6 +1517,94 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           />
         ))}
       </div>
+
+      {/* Running sessions section — only rendered when there's at least one
+          session currently working OR waiting for a quota reset, so the panel
+          disappears on its own once the last agent finishes/cancels. */}
+      {(runningSessions.length > 0 || waitingSchedules.length > 0) && (
+        <div
+          style={{
+            borderTop: "1px solid var(--border)",
+            display: "flex",
+            flexDirection: "column",
+            flex: runningPanelOpen ? "1 1 0" : "0 0 auto",
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+            <button
+              onClick={() => setRunningPanelOpen((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                flex: 1,
+                padding: "6px 10px",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                textAlign: "left",
+              }}
+            >
+              <svg
+                width="9" height="9" viewBox="0 0 10 10" fill="none"
+                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+                style={{ transform: runningPanelOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+              >
+                <polyline points="3 2 7 5 3 8" />
+              </svg>
+              Running
+              <span style={{ marginLeft: 2, opacity: 0.7, fontWeight: 500 }}>
+                · {runningSessions.length}
+                {waitingSchedules.length > 0 && (
+                  <span style={{ color: "#d97706" }}> + {waitingSchedules.length} waiting</span>
+                )}
+              </span>
+            </button>
+          </div>
+          {runningPanelOpen && (
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+              {runningSessions.map((s) => (
+                <SessionItem
+                  key={s.id}
+                  session={s}
+                  isSelected={s.id === selectedSessionId}
+                  isRunning
+                  isUnread={false}
+                  onClick={() => handleSelectSessionFromList(s)}
+                  onRenamed={loadSessions}
+                  onDeleted={(id) => {
+                    onSessionDeleted?.(id);
+                    loadSessions();
+                  }}
+                  depth={0}
+                />
+              ))}
+              {waitingSchedules.map((sched) => {
+                const session = allSessions.find((a) => a.id === sched.sessionId);
+                return (
+                  <WaitingSessionItem
+                    key={sched.sessionId}
+                    session={session}
+                    schedule={sched}
+                    isSelected={sched.sessionId === selectedSessionId}
+                    onClick={() => {
+                      if (session) handleSelectSessionFromList(session);
+                    }}
+                    onCancel={() => autoResumeStore.cancel(sched.sessionId)}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
@@ -1755,6 +1856,141 @@ function UnreadSessionIndicator() {
         </circle>
       </svg>
     </span>
+  );
+}
+
+function WaitingSessionIndicator() {
+  return (
+    <span
+      title="Waiting for token quota to reset…"
+      aria-label="Waiting for quota reset"
+      style={{
+        width: 14,
+        height: 14,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "#d97706",
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
+        <circle cx="12" cy="12" r="9" />
+        <polyline points="12 7 12 12 15 14" />
+      </svg>
+    </span>
+  );
+}
+
+function formatRemainingMs(ms: number): string {
+  if (ms <= 0) return "any moment";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function WaitingSessionItem({
+  session,
+  schedule,
+  isSelected,
+  onClick,
+  onCancel,
+}: {
+  session: SessionInfo | undefined;
+  schedule: AutoResumeSchedule;
+  isSelected: boolean;
+  onClick: () => void;
+  onCancel: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const remainMs = Math.max(0, schedule.wakesAt - now);
+  const title = session?.name
+    || schedule.lastPrompt.split("\n")[0].slice(0, 50)
+    || schedule.sessionId.slice(0, 12);
+  const subtitle = session
+    ? `auto-resume in ${formatRemainingMs(remainMs)}`
+    : `auto-resume in ${formatRemainingMs(remainMs)} · ${schedule.lastPrompt.split("\n")[0].slice(0, 40)}`;
+
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      title={schedule.lastPrompt}
+      style={{
+        height: 54,
+        display: "flex",
+        alignItems: "center",
+        padding: "0 8px 0 14px",
+        cursor: "pointer",
+        background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+        borderLeft: isSelected ? "2px solid var(--accent)" : "2px solid transparent",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+        <WaitingSessionIndicator />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{
+            fontSize: 13,
+            color: "var(--text)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            lineHeight: 1.25,
+          }}>
+            {title}
+          </div>
+          <div style={{
+            fontSize: 11,
+            color: "#d97706",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            lineHeight: 1.3,
+            marginTop: 2,
+          }}>
+            {subtitle}
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onCancel();
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
+        title="Cancel auto-resume"
+        aria-label="Cancel auto-resume"
+        style={{
+          background: "transparent",
+          border: "none",
+          color: hovered ? "var(--text-dim)" : "transparent",
+          cursor: "pointer",
+          padding: 4,
+          marginLeft: 4,
+          fontSize: 16,
+          lineHeight: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          borderRadius: 4,
+        }}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
