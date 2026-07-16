@@ -630,7 +630,7 @@ export class AgentSessionWrapper {
       const done = (value: T) => this.closeCustomUi(id, value);
 
       Promise.resolve()
-        .then(() => factory(tui, undefined, undefined, done))
+        .then(() => factory(tui, PLAIN_TEXT_THEME, undefined, done))
         .then((component) => {
           if (!component || typeof component !== "object" || typeof (component as CustomUiComponent).render !== "function") {
             resolve(undefined as T);
