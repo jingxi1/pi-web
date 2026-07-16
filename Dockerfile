@@ -1,10 +1,14 @@
 # ===== Stage 1: builder =====
 FROM harbor.192.168.9.220.nip.io/library/node:22-bookworm-slim AS builder
 
+# npm 镜像源（默认 npmmirror，国内拉包飞快；可通过 --build-arg NPM_REGISTRY=... 覆盖）
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm config set registry "${NPM_REGISTRY}" \
+ && npm ci
 
 COPY . .
 RUN npm run build
