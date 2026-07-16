@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
+import { parseCustomUi, type ParsedCustomUi, type ParsedOption } from "@/lib/extension-custom-ui-parser";
 import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
@@ -984,6 +985,7 @@ function ExtensionCustomPanel({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const displayLines = normalizeCustomPanelLines(request.lines);
+  const parsed = useMemo(() => parseCustomUi(displayLines), [displayLines]);
 
   useEffect(() => {
     panelRef.current?.focus();
@@ -1023,10 +1025,14 @@ function ExtensionCustomPanel({
           boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
           overflow: "hidden",
           outline: "none",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>Extension panel</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>
+            {parsed.kind === "options" ? "Question" : parsed.kind === "review" ? "Review answers" : "Extension panel"}
+          </div>
           <button
             onClick={() => onInput(request, "\x03")}
             style={{
@@ -1042,28 +1048,378 @@ function ExtensionCustomPanel({
             Close
           </button>
         </div>
-        <pre
+        <div
           style={{
-            margin: 0,
-            padding: 14,
-            maxHeight: "calc(min(760px, 100vh - 40px) - 48px)",
+            flex: 1,
+            minHeight: 0,
             overflow: "auto",
             background: "var(--bg-panel)",
-            color: "var(--text)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 13,
-            lineHeight: 1.45,
-            whiteSpace: "pre",
           }}
         >
-          {(displayLines.length ? displayLines : [""]).map((line, index, allLines) => (
-            <Fragment key={index}>
-              {renderAnsiLine(line, `line-${index}`)}
-              {index < allLines.length - 1 ? "\n" : null}
-            </Fragment>
-          ))}
-        </pre>
+          {parsed.kind === "options" ? (
+            <ExtensionCustomOptionsView parsed={parsed} onInput={onInput} request={request} />
+          ) : parsed.kind === "review" ? (
+            <ExtensionCustomReviewView parsed={parsed} onInput={onInput} request={request} />
+          ) : (
+            <ExtensionCustomRawView lines={displayLines} />
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Build the keystroke sequence that navigates from `from` to `to` in an
+ * option list using arrow keys, then optionally presses Enter or Space.
+ *
+ * The Ink state machine treats Down/Up as the canonical cursor movers and
+ * Enter as the submit/toggle action. Space is also accepted by some
+ * extensions as a toggle. We send Up/Down because they're universally
+ * supported (h/j keys aren't — toTerminalKeyData only handles ArrowUp/Down).
+ */
+function navKeySequence(from: number, to: number, finalize: "enter" | "space" | "none"): string {
+  if (from < 0) from = 0;
+  const delta = to - from;
+  let s = "";
+  if (delta > 0) s += "\x1b[B".repeat(delta);
+  else if (delta < 0) s += "\x1b[A".repeat(-delta);
+  if (finalize === "enter") s += "\r";
+  else if (finalize === "space") s += " ";
+  return s;
+}
+
+/**
+ * Convert a parsed-option tap into the corresponding keystroke sequence.
+ * The Ink TUI only knows about its own server-side cursor position, so we
+ * need to navigate from the currently-selected item to the tapped one.
+ */
+function optionTapSequence(
+  option: ParsedOption,
+  selectedIndex: number,
+  multiSelect: boolean,
+): string {
+  return navKeySequence(
+    selectedIndex,
+    option.index,
+    multiSelect ? "space" : "enter",
+  );
+}
+
+function reviewTapSequence(fromIndex: number, toIndex: number): string {
+  // Review tab uses the same Up/Down navigation; Enter submits.
+  return navKeySequence(fromIndex, toIndex, toIndex === fromIndex ? "enter" : "enter");
+}
+
+/**
+ * Options view: tappable buttons for each option, with text-input support
+ * for the "Type your own answer" slot. Tap-to-toggle for multi-select,
+ * tap-to-select-and-submit for single-select.
+ */
+function ExtensionCustomOptionsView({
+  parsed,
+  onInput,
+  request,
+}: {
+  parsed: Extract<ParsedCustomUi, { kind: "options" }>;
+  onInput: (request: ExtensionCustomRequest, data: string) => void;
+  request: ExtensionCustomRequest;
+}) {
+  const [customInput, setCustomInput] = useState("");
+  const [showCustomInput, setShowCustomInput] = useState(false);
+  const customInputRef = useRef<HTMLInputElement>(null);
+  const isEditing = parsed.items[parsed.selectedIndex]?.isCustom === true;
+
+  // If the server enters editing mode (cursor moves to the custom slot and
+  // the panel re-renders), auto-focus the mobile input box.
+  useEffect(() => {
+    if (isEditing && !showCustomInput) {
+      setShowCustomInput(true);
+    }
+  }, [isEditing, showCustomInput]);
+
+  useEffect(() => {
+    if (showCustomInput) {
+      customInputRef.current?.focus();
+    }
+  }, [showCustomInput]);
+
+  const handleOptionTap = (item: ParsedOption) => {
+    if (item.isCustom) {
+      // For the custom-input slot, navigate to it and press Enter to enter
+      // editing mode. The Ink state machine will then switch to its own
+      // input buffer; the mobile view shows our text input below.
+      const seq = navKeySequence(parsed.selectedIndex, item.index, "enter");
+      onInput(request, seq);
+      setShowCustomInput(true);
+      return;
+    }
+    const seq = optionTapSequence(item, parsed.selectedIndex, parsed.multiSelect);
+    onInput(request, seq);
+  };
+
+  const handleCustomSubmit = () => {
+    const text = customInput.trim();
+    if (!text) return;
+    // The Ink buffer is empty when the panel first enters editing mode, so
+    // we send each printable character and then Enter to commit. Whitespace
+    // characters that have special meaning (Enter, Escape, Tab, arrow keys)
+    // are not allowed — Ink only treats printable chars as input in editing
+    // mode, anything else is interpreted as control.
+    const safe = text.replace(/[\r\n\t\x1b\x7f]/g, " ");
+    onInput(request, safe + "\r");
+    setCustomInput("");
+    setShowCustomInput(false);
+  };
+
+  const handleCustomCancel = () => {
+    onInput(request, "\x1b");
+    setCustomInput("");
+    setShowCustomInput(false);
+  };
+
+  return (
+    <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 14 }}>
+      {parsed.question ? (
+        <div style={{ color: "var(--text)", fontSize: 14, lineHeight: 1.45 }}>
+          {parsed.question}
+        </div>
+      ) : null}
+      <div role="list" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {parsed.items.map((item) => {
+          const isSel = item.index === parsed.selectedIndex;
+          const accent = "var(--accent, #2563eb)";
+          return (
+            <button
+              key={item.index}
+              role="listitem"
+              type="button"
+              onClick={() => handleOptionTap(item)}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: `1.5px solid ${isSel ? accent : "var(--border)"}`,
+                background: isSel ? "rgba(37, 99, 235, 0.08)" : "var(--bg)",
+                color: "var(--text)",
+                cursor: "pointer",
+                textAlign: "left",
+                fontSize: 14,
+                fontFamily: "inherit",
+                minHeight: 44,
+                transition: "background 0.12s, border-color 0.12s",
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  flexShrink: 0,
+                  width: 22,
+                  height: 22,
+                  marginTop: 1,
+                  borderRadius: parsed.multiSelect ? 4 : "50%",
+                  border: `1.5px solid ${isSel || item.checked ? accent : "var(--border)"}`,
+                  background: item.checked ? accent : "transparent",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#fff",
+                  fontSize: 14,
+                  lineHeight: 1,
+                }}
+              >
+                {parsed.multiSelect
+                  ? item.checked ? "✓" : ""
+                  : isSel ? "" : ""}
+              </span>
+              <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+                <span style={{ fontWeight: isSel ? 600 : 500 }}>
+                  {item.label}
+                  {item.isCustom ? <span style={{ marginLeft: 6, fontSize: 12, color: "var(--text-muted)" }}>(custom)</span> : null}
+                </span>
+                {item.description ? (
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                    {item.description}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {showCustomInput ? (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid var(--accent, #2563eb)",
+            background: "var(--bg)",
+          }}
+        >
+          <label style={{ fontSize: 12, color: "var(--text-muted)" }} htmlFor="custom-answer">
+            Your answer
+          </label>
+          <input
+            id="custom-answer"
+            ref={customInputRef}
+            value={customInput}
+            onChange={(e) => setCustomInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleCustomSubmit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                handleCustomCancel();
+              }
+            }}
+            placeholder="Type your answer…"
+            inputMode="text"
+            autoComplete="off"
+            style={{
+              padding: "8px 10px",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              background: "var(--bg-panel)",
+              color: "var(--text)",
+              fontSize: 14,
+              fontFamily: "inherit",
+              outline: "none",
+            }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={handleCustomSubmit}
+              disabled={customInput.trim().length === 0}
+              style={{
+                flex: 1,
+                padding: "10px 12px",
+                borderRadius: 6,
+                border: "none",
+                background: customInput.trim() ? "var(--accent, #2563eb)" : "var(--border)",
+                color: "#fff",
+                cursor: customInput.trim() ? "pointer" : "not-allowed",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              Send
+            </button>
+            <button
+              type="button"
+              onClick={handleCustomCancel}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 6,
+                border: "1px solid var(--border)",
+                background: "var(--bg-panel)",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 14,
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Review view: list of answers plus a Submit button. Tap an item to navigate
+ * to it (so the user can re-edit), tap Submit to confirm.
+ */
+function ExtensionCustomReviewView({
+  parsed,
+  onInput,
+  request,
+}: {
+  parsed: Extract<ParsedCustomUi, { kind: "review" }>;
+  onInput: (request: ExtensionCustomRequest, data: string) => void;
+  request: ExtensionCustomRequest;
+}) {
+  return (
+    <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div role="list" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {parsed.items.map((item) => {
+          const isSel = item.index === parsed.selectedIndex;
+          const isSubmit = item.answer.length === 0 && item.questionLabel.toLowerCase().includes("submit");
+          return (
+            <button
+              key={item.index}
+              role="listitem"
+              type="button"
+              onClick={() => onInput(request, reviewTapSequence(parsed.selectedIndex, item.index))}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: `1.5px solid ${isSel ? "var(--accent, #2563eb)" : "var(--border)"}`,
+                background: isSel ? "rgba(37, 99, 235, 0.08)" : "var(--bg)",
+                color: "var(--text)",
+                cursor: "pointer",
+                textAlign: "left",
+                fontSize: 14,
+                fontFamily: "inherit",
+                minHeight: 44,
+              }}
+            >
+              <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+                {isSubmit ? (
+                  <span style={{ fontWeight: isSel ? 600 : 500 }}>{item.questionLabel}</span>
+                ) : (
+                  <>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{item.questionLabel}</span>
+                    <span style={{ fontWeight: isSel ? 600 : 500 }}>{item.answer || "—"}</span>
+                  </>
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", textAlign: "center" }}>
+        Tap an answer to navigate · Submit to confirm
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Plain-text fallback for patterns the parser doesn't recognize.
+ * Identical to the original ExtensionCustomPanel body content; kept separate
+ * so the structured views above don't pull in the heavy `<pre>`/ANSI path.
+ */
+function ExtensionCustomRawView({ lines }: { lines: string[] }) {
+  return (
+    <pre
+      style={{
+        margin: 0,
+        padding: 14,
+        background: "var(--bg-panel)",
+        color: "var(--text)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 13,
+        lineHeight: 1.45,
+        whiteSpace: "pre",
+      }}
+    >
+      {(lines.length ? lines : [""]).map((line, index, allLines) => (
+        <Fragment key={index}>
+          {renderAnsiLine(line, `line-${index}`)}
+          {index < allLines.length - 1 ? "\n" : null}
+        </Fragment>
+      ))}
+    </pre>
   );
 }
