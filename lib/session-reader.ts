@@ -1,4 +1,9 @@
-import { SessionManager, buildSessionContext as piBuildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  buildContextEntries as piBuildContextEntries,
+  buildSessionContext as piBuildSessionContext,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import { closeSync, openSync, readSync } from "fs";
 import { normalize as normalizePath } from "path";
 import type { AgentMessage, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
@@ -41,10 +46,38 @@ async function loadAllSessions(): Promise<SessionInfo[]> {
 }
 
 export async function listAllSessions(): Promise<SessionInfo[]> {
-  globalThis.__piSessionListPromise ??= loadAllSessions().finally(() => {
-    globalThis.__piSessionListPromise = undefined;
+  const generation = globalThis.__piSessionListGeneration ?? 0;
+
+  // Return cached result if still fresh (avoids re-scanning session files
+  // and re-spawning git processes on every page load).
+  if (globalThis.__piSessionListCache && Date.now() - globalThis.__piSessionListCache.ts < SESSION_LIST_CACHE_TTL_MS) {
+    return globalThis.__piSessionListCache.data;
+  }
+
+  // Coalescing dedup: concurrent callers share the same in-flight promise
+  // only while it belongs to the current cache generation.
+  if (globalThis.__piSessionListPromise && globalThis.__piSessionListPromiseGeneration === generation) {
+    return globalThis.__piSessionListPromise;
+  }
+
+  const loadPromise = loadAllSessions().then((data) => {
+    // An invalidation may happen while the scan is in flight. Do not let that
+    // older result repopulate the cache after a session mutation.
+    if ((globalThis.__piSessionListGeneration ?? 0) === generation) {
+      globalThis.__piSessionListCache = { data, ts: Date.now() };
+    }
+    return data;
   });
-  return globalThis.__piSessionListPromise;
+  const trackedPromise = loadPromise.finally(() => {
+    if (globalThis.__piSessionListPromise === trackedPromise) {
+      globalThis.__piSessionListPromise = undefined;
+      globalThis.__piSessionListPromiseGeneration = undefined;
+    }
+  });
+
+  globalThis.__piSessionListPromise = trackedPromise;
+  globalThis.__piSessionListPromiseGeneration = generation;
+  return trackedPromise;
 }
 
 // ============================================================================
@@ -54,6 +87,16 @@ declare global {
   var __piSessionPathCache: Map<string, string> | undefined;
   var __piPathToSessionIdCache: Map<string, string> | undefined;
   var __piSessionListPromise: Promise<SessionInfo[]> | undefined;
+  var __piSessionListPromiseGeneration: number | undefined;
+  var __piSessionListGeneration: number | undefined;
+  var __piSessionListCache: { data: SessionInfo[]; ts: number } | undefined;
+}
+
+const SESSION_LIST_CACHE_TTL_MS = 30_000;
+
+export function invalidateSessionListCache(): void {
+  globalThis.__piSessionListGeneration = (globalThis.__piSessionListGeneration ?? 0) + 1;
+  globalThis.__piSessionListCache = undefined;
 }
 
 function getPathCache(): Map<string, string> {
@@ -159,39 +202,22 @@ export function buildSessionContext(
   const piEntries = entries as unknown as PiSessionEntry[];
   const piCtx = piBuildSessionContext(piEntries, leafId, byId as unknown as Map<string, PiSessionEntry>);
 
-  // Build entryIds: parallel array to messages[], mapping each message back to its entry id.
-  // Needed for fork and navigate_tree calls from the UI.
-  let targetLeaf: SessionEntry | undefined;
-  if (leafId === null) {
-    return { messages: [], entryIds: [], thinkingLevel: piCtx.thinkingLevel, model: piCtx.model };
-  }
-  if (leafId) targetLeaf = byId.get(leafId);
-  if (!targetLeaf) targetLeaf = entries[entries.length - 1];
-  if (!targetLeaf) {
-    return { messages: [], entryIds: [], thinkingLevel: piCtx.thinkingLevel, model: piCtx.model };
-  }
+  const contextEntries = piBuildContextEntries(
+    piEntries,
+    leafId,
+    byId as unknown as Map<string, PiSessionEntry>,
+  );
 
-  // Walk path from target leaf to root
-  const path: SessionEntry[] = [];
-  let cur: SessionEntry | undefined = targetLeaf;
-  while (cur) {
-    path.unshift(cur);
-    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-  }
-
-  // Build UI history from the FULL branch path (root to leaf), without trimming.
-  // pi's buildSessionContext targets LLM context: it drops everything before the last
-  // compaction's firstKeptEntryId. Correct for the model, but it would hide compacted
-  // history from the UI. We keep piCtx only for thinkingLevel/model, and render every
-  // displayable entry on the path ourselves; compaction/branch_summary entries become
-  // inline summary messages so the user still sees where context was compressed.
+  // Convert the SDK-selected context entries and their IDs together. This keeps
+  // fork/navigation targets aligned while preserving pi's compaction ordering.
   const messages: AgentMessage[] = [];
   const entryIds: string[] = [];
-  for (const e of path) {
-    const m = entryToUiMessage(e, options);
+  for (const entry of contextEntries) {
+    const localEntry = entry as unknown as SessionEntry;
+    const m = entryToUiMessage(localEntry, options);
     if (m) {
       messages.push(m);
-      entryIds.push(e.id);
+      entryIds.push(localEntry.id);
     }
   }
 
