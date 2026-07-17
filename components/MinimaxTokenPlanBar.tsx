@@ -43,6 +43,32 @@ function bucketOf(cat: TokenPlanCategory, kind: "interval" | "weekly"): BucketDa
   return { reset: cat.weeklyResetsIn, used: cat.weeklyUsedPercent, total: cat.weeklyTotalPercent };
 }
 
+/**
+ * The API / store returns "—" when the reset time is unknown / unavailable
+ * (see lib/time-format.ts formatRemainingSeconds). Show nothing in that case
+ * so the chip stays compact instead of leaking an em-dash next to the percent.
+ */
+function isUsableReset(reset: string | null | undefined): reset is string {
+  return typeof reset === "string" && reset.length > 0 && reset !== "—";
+}
+
+function ResetText({ reset }: { reset: string | null | undefined }) {
+  if (!isUsableReset(reset)) return null;
+  return (
+    <span
+      style={{
+        color: "var(--text-muted)",
+        fontSize: 10,
+        fontWeight: 500,
+        fontVariantNumeric: "tabular-nums",
+        letterSpacing: "0.01em",
+      }}
+    >
+      ·{reset}
+    </span>
+  );
+}
+
 function CategoryChip({ cat, kind }: { cat: TokenPlanCategory; kind: "interval" | "weekly" }) {
   const data = bucketOf(cat, kind);
   const showData = cat.available && data.reset !== "—";
@@ -55,9 +81,7 @@ function CategoryChip({ cat, kind }: { cat: TokenPlanCategory; kind: "interval" 
       <span style={{ color: showData ? percentColor(data.total - data.used) : "var(--text-dim)", fontWeight: 600 }}>
         {showData ? `${data.used}/${data.total}` : "—"}
       </span>
-      {showData && (
-        <span style={{ color: "var(--text-muted)", fontSize: 10 }}>⟲{data.reset}</span>
-      )}
+<ResetText reset={data.reset} />
     </span>
   );
 }
@@ -123,20 +147,34 @@ export function MinimaxTokenPlanBar({ enabled }: Props) {
     } else {
       body = (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+          <span
+            style={{ display: "inline-flex", alignItems: "center", gap: 3 }}
+            title={`5h: ${general.intervalUsedPercent}/${general.intervalTotalPercent} used, resets in ${general.intervalResetsIn}`}
+          >
             <span style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 600 }}>5h</span>
-            <span style={{ color: general.available ? percentColor(general.intervalTotalPercent - general.intervalUsedPercent) : "var(--text-dim)", fontWeight: 600 }}>
-              {general.available ? `${general.intervalUsedPercent}/${general.intervalTotalPercent}` : "—"}
+<span
+              style={{ color: general.available && general.intervalTotalPercent > 0 ? percentColor(general.intervalTotalPercent - general.intervalUsedPercent) : "var(--text-dim)", fontWeight: 600 }}
+            >
+              {general.available && general.intervalTotalPercent > 0
+                ? `${Math.round((general.intervalUsedPercent / general.intervalTotalPercent) * 100)}%`
+                : "—"}
             </span>
-            {general.intervalResetsIn !== "—" && <span style={{ color: "var(--text-muted)", fontSize: 10 }}>⟲{general.intervalResetsIn}</span>}
+            <ResetText reset={general.intervalResetsIn} />
           </span>
           <span style={{ color: "var(--text-dim)" }}>·</span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+          <span
+            style={{ display: "inline-flex", alignItems: "center", gap: 3 }}
+            title={`wk: ${general.weeklyUsedPercent}/${general.weeklyTotalPercent} used, resets in ${general.weeklyResetsIn}`}
+          >
             <span style={{ color: "var(--text-muted)", fontSize: 10, fontWeight: 600 }}>wk</span>
-            <span style={{ color: general.available ? percentColor(general.weeklyTotalPercent - general.weeklyUsedPercent) : "var(--text-dim)", fontWeight: 600 }}>
-              {general.available ? `${general.weeklyUsedPercent}/${general.weeklyTotalPercent}` : "—"}
+<span
+              style={{ color: general.available && general.weeklyTotalPercent > 0 ? percentColor(general.weeklyTotalPercent - general.weeklyUsedPercent) : "var(--text-dim)", fontWeight: 600 }}
+            >
+              {general.available && general.weeklyTotalPercent > 0
+                ? `${Math.round((general.weeklyUsedPercent / general.weeklyTotalPercent) * 100)}%`
+                : "—"}
             </span>
-            {general.weeklyResetsIn !== "—" && <span style={{ color: "var(--text-muted)", fontSize: 10 }}>⟲{general.weeklyResetsIn}</span>}
+            <ResetText reset={general.weeklyResetsIn} />
           </span>
         </span>
       );
