@@ -10,6 +10,24 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// GET /api/terminal/[id] — alive check (used by client to verify a persisted terminalId)
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const entry = getTerminal(id);
+  if (!entry) {
+    return NextResponse.json({ alive: false, exited: true }, { status: 404 });
+  }
+  return NextResponse.json({
+    alive: !entry.exited,
+    exited: entry.exited,
+    cwd: entry.cwd,
+    exitCode: entry.exitCode,
+  });
+}
+
 // POST /api/terminal/[id] — input / resize / continue / kill
 // body: { action: "input" | "resize" | "continue" | "kill", data?, cols?, rows? }
 export async function POST(
