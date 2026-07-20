@@ -189,6 +189,20 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
 
       // ---- spawn or attach ----
       let id = aliveIdRef.current;
+      if (id) {
+        // TerminalId came from localStorage restore — verify the backend still has it alive
+        try {
+          const res = await fetch(`/api/terminal/${encodeURIComponent(id)}`);
+          if (!res.ok) {
+            id = null; // 404 — terminal gone, fall through to create new
+          } else {
+            const status = await res.json() as { alive: boolean };
+            if (!status.alive) id = null; // exited, can't continue
+          }
+        } catch {
+          id = null; // network error — create fresh
+        }
+      }
       if (!id) {
         try {
           const res = await fetch("/api/terminal", {

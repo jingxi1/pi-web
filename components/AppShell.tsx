@@ -167,6 +167,41 @@ export function AppShell() {
   // (e.g. one per cwd) and survive tab switches.
   const [terminalIds, setTerminalIds] = useState<Record<string, string>>({});
 
+  // --- Persistent terminal state across page refresh ---
+  const STORAGE_KEY = "pi-terminal-state";
+
+  interface PersistedTerminalState {
+    terminalIds: Record<string, string>;
+    fileTabs: Tab[];
+    activeFileTabId: string | null;
+    rightPanelOpen: boolean;
+  }
+
+  // Restore persisted state on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as PersistedTerminalState;
+      if (saved.terminalIds && typeof saved.terminalIds === "object") setTerminalIds(saved.terminalIds);
+      if (Array.isArray(saved.fileTabs)) setFileTabs(saved.fileTabs);
+      if (typeof saved.activeFileTabId === "string") setActiveFileTabId(saved.activeFileTabId);
+      if (typeof saved.rightPanelOpen === "boolean") setRightPanelOpen(saved.rightPanelOpen);
+    } catch {
+      // Corrupted localStorage — ignore
+    }
+  }, []);
+
+  // Persist terminal state on changes
+  useEffect(() => {
+    try {
+      const data: PersistedTerminalState = { terminalIds, fileTabs, activeFileTabId, rightPanelOpen };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch {
+      // Storage full or unavailable — ignore
+    }
+  }, [terminalIds, fileTabs, activeFileTabId, rightPanelOpen]);
+
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
   const handleAtMention = useCallback((relativePath: string, isDir: boolean) => {

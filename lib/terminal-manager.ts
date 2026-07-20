@@ -68,10 +68,10 @@ function appendScrollback(entry: TerminalEntry, chunk: string) {
 function resetIdleTimer(entry: TerminalEntry, id: string) {
   if (entry.idleTimer) clearTimeout(entry.idleTimer);
   entry.idleTimer = setTimeout(() => {
-    if (entry.listeners.size > 0) return; // someone is watching — reset
-    killTerminal(id);
+    // Terminals persist until explicitly killed — no auto-cleanup here.
+    // The timer is kept for its `.unref()` side-effect so it doesn't
+    // keep the event loop alive indefinitely.
   }, IDLE_TIMEOUT_MS);
-  // Don't keep the event loop alive solely for this timer
   if (typeof entry.idleTimer.unref === "function") entry.idleTimer.unref();
 }
 
