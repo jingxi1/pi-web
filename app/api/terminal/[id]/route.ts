@@ -4,13 +4,14 @@ import {
   writeToTerminal,
   resizeTerminal,
   killTerminal,
+  continueTerminal,
 } from "@/lib/terminal-manager";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// POST /api/terminal/[id] — input / resize / kill
-// body: { action: "input" | "resize" | "kill", data?, cols?, rows? }
+// POST /api/terminal/[id] — input / resize / continue / kill
+// body: { action: "input" | "resize" | "continue" | "kill", data?, cols?, rows? }
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -43,6 +44,11 @@ export async function POST(
       return NextResponse.json({ error: "cols and rows must be positive numbers" }, { status: 400 });
     }
     const ok = resizeTerminal(id, cols, rows);
+    return NextResponse.json({ ok });
+  }
+
+  if (action === "continue") {
+    const ok = continueTerminal(id);
     return NextResponse.json({ ok });
   }
 

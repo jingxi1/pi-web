@@ -31,6 +31,17 @@ export async function GET(
 
       encode({ type: "connected", id });
 
+      // Replay existing scrollback with a `replay: true` flag so the client
+      // can distinguish history from realtime output.
+      if (entry.scrollback.length > 0) {
+        // Chunk the scrollback into ~4KB frames so EventSource / xterm aren't
+        // flooded with one giant write on slow connections.
+        const MAX_FRAME = 4096;
+        for (let i = 0; i < entry.scrollback.length; i += MAX_FRAME) {
+          encode({ type: "data", data: entry.scrollback.slice(i, i + MAX_FRAME), replay: true });
+        }
+      }
+
       const unsubscribe = subscribe(id, (chunk) => {
         encode({ type: "data", data: chunk });
       });
