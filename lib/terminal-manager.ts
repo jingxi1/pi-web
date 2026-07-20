@@ -21,6 +21,8 @@ interface TerminalEntry {
   shell: string;
   cols: number;
   rows: number;
+  /** Path to this PTY's --rcfile (cleaned up on exit / kill). */
+  rcPath: string;
 }
 
 declare global {
@@ -137,6 +139,7 @@ export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_R
     shell,
     cols,
     rows,
+    rcPath,
   };
 
   pty.onData((data) => {
@@ -219,14 +222,14 @@ export function listTerminals(): { id: string; cwd: string; exited: boolean }[] 
 }
 
 /**
- * Subscribe to a terminal's output. Returns an unsubscribe function.
- * The first time a callback is added, scrollback is replayed to it via a one-shot
- * replay call (so late joiners see prior output).
+ * Subscribe to a terminal's LIVE output. Returns an unsubscribe function.
+ *
+ * NOTE: scrollback is NOT replayed here — the SSE handler replays it explicitly
+ * with a `replay: true` flag so clients can distinguish history from realtime.
  */
 export function subscribe(id: string, cb: (chunk: string) => void): () => void {
   const entry = getMap().get(id);
   if (!entry) return () => {};
-  if (entry.scrollback.length > 0) cb(entry.scrollback);
   entry.listeners.add(cb);
   resetIdleTimer(entry, id);
   return () => {
@@ -265,8 +268,85 @@ export function killTerminal(id: string): boolean {
   try {
     entry.pty.kill();
   } catch { /* ignore */ }
+  try { unlinkSync(entry.rcPath); } catch { /* already gone */ }
   if (entry.idleTimer) clearTimeout(entry.idleTimer);
   getMap().delete(id);
+  return true;
+}
+
+/**
+ * Re-spawn the shell on an already-exited terminal entry, preserving its
+ * id, cwd, and listeners so the existing SSE stream seamlessly continues.
+ */
+export function continueTerminal(id: string): boolean {
+  const entry = getMap().get(id);
+  if (!entry || !entry.exited) return false;
+
+  // Clean up old rc file
+  try { unlinkSync(entry.rcPath); } catch { /* gone */ }
+
+  // New init file for the fresh shell
+  const newRcPath = `/tmp/.pi-term-init-${id}-${Date.now()}`;
+  writeFileSync(
+    newRcPath,
+    [
+      `PS1='\\[\\033[33m\\]▸ \\[\\033[0m\\]'`,
+      `bind 'set show-all-if-ambiguous on' 2>/dev/null || true`,
+    ].join("\n") + "\n",
+  );
+  entry.rcPath = newRcPath;
+
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    HOME: process.env.HOME || homedir(),
+    USER: process.env.USER || userInfo().username || "user",
+    BASH_SILENCE_DEPRECATION: "1",
+  };
+
+  const newPty = spawn(entry.shell, ["--rcfile", newRcPath], {
+    name: "xterm-256color",
+    cols: entry.cols,
+    rows: entry.rows,
+    cwd: entry.cwd,
+    env,
+    useConpty: false,
+  });
+
+  // Wire up the new PTY — listeners from the old one receive data automatically
+  newPty.onData((data) => {
+    appendScrollback(entry, data);
+    for (const cb of entry.listeners) {
+      try { cb(data); } catch { /* ignore listener errors */ }
+    }
+  });
+
+  newPty.onExit(({ exitCode }) => {
+    entry.exited = true;
+    entry.exitCode = exitCode;
+    try { unlinkSync(newRcPath); } catch { /* gone */ }
+    for (const cb of entry.listeners) {
+      try { cb(`\n[process exited with code ${exitCode}]\n`); } catch { /* ignore */ }
+    }
+    // Keep briefly so late subscribers can see
+    setTimeout(() => {
+      const map = globalThis.__piTerminals;
+      if (map?.get(id) === entry) map.delete(id);
+    }, POST_EXIT_DELAY_MS).unref();
+  });
+
+  entry.pty = newPty;
+  entry.exited = false;
+  entry.exitCode = null;
+
+  // Tell listeners the shell is back
+  const banner = "\r\n\x1b[33m[terminal]\x1b[0m continued in interactive shell\r\n";
+  appendScrollback(entry, banner);
+  for (const cb of entry.listeners) {
+    try { cb(banner); } catch { /* ignore */ }
+  }
+
   return true;
 }
 

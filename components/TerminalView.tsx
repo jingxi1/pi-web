@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 
@@ -18,9 +18,26 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
   const roRef = useRef<ResizeObserver | null>(null);
   const aliveIdRef = useRef<string | null>(null);
   const disposedRef = useRef(false);
+  /** Set when the PTY shell exits; Enter continues, any other key kills the tab. */
+  const isExitedRef = useRef(false);
+
+  // Expose a stable ref for the copy/paste key handler so it doesn't need
+  // to be re-registered each time aliveIdRef changes.
+  const copyPasteIdRef = useRef<string | null>(null);
+  copyPasteIdRef.current = aliveIdRef.current;
+
+  // Write clipboard text into the PTY via POST input.
+  const pasteToTerminal = useCallback((text: string) => {
+    const id = copyPasteIdRef.current;
+    if (!id) return;
+    void fetch(`/api/terminal/${encodeURIComponent(id)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "input", data: text }),
+    }).catch(() => { /* ignore */ });
+  }, []);
 
   // CRT theme — green-on-dark with amber cursor + subtle phosphor glow.
-  // Toned-down colors (vs pure #00ff00) keep long sessions easy on the eyes.
   function readTheme(): NonNullable<ConstructorParameters<typeof import("@xterm/xterm").Terminal>[0]>["theme"] {
     return {
       background: "#0a0e0a",
@@ -51,6 +68,7 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
   useEffect(() => {
     disposedRef.current = false;
     aliveIdRef.current = terminalId;
+    isExitedRef.current = false;
 
     let cancelled = false;
     const cleanup = () => {
@@ -65,7 +83,6 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
     };
 
     async function setup() {
-      // Lazy-load xterm — it touches `window` and needs the client runtime.
       const [{ Terminal: TerminalCtor }, { FitAddon: FitAddonCtor }] = await Promise.all([
         import("@xterm/xterm"),
         import("@xterm/addon-fit"),
@@ -94,10 +111,56 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
       termRef.current = term;
       fitRef.current = fit;
 
-      // Forward keystrokes to the backend
+      // ---- copy / paste ----
+      // Ctrl+Shift+C → copy selected text via Clipboard API
+      // Ctrl+Shift+V → paste clipboard text into PTY
+      term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== "keydown") return true;
+        if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return true;
+
+        if (e.key === "C" || e.key === "c") {
+          const sel = term.getSelection();
+          if (sel) {
+            void navigator.clipboard.writeText(sel);
+            term.clearSelection();
+          }
+          return false;
+        }
+        if (e.key === "V" || e.key === "v") {
+          void navigator.clipboard.readText().then(pasteToTerminal).catch(() => {});
+          return false;
+        }
+        return true;
+      });
+
+      // ---- input keystroke forwarding ----
       term.onData((data) => {
         const id = aliveIdRef.current;
         if (!id) return;
+
+        // When the shell is in "exited" state, we intercept keystrokes:
+        //   Enter       → POST /continue (re-spawn the shell)
+        //   anything else → POST /kill   (close the tab, the user can re-open)
+        if (isExitedRef.current) {
+          if (data === "\r") {
+            isExitedRef.current = false;
+            void fetch(`/api/terminal/${encodeURIComponent(id)}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "continue" }),
+            }).catch(() => { /* ignore */ });
+          } else {
+            // Kill the terminal; the parent's handleCloseFileTab will close the tab.
+            void fetch(`/api/terminal/${encodeURIComponent(id)}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "kill" }),
+            }).catch(() => { /* ignore */ });
+          }
+          return; // don't forward to PTY
+        }
+
+        // Normal flow: forward keystroke to the live PTY
         void fetch(`/api/terminal/${encodeURIComponent(id)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -105,7 +168,7 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
         }).catch(() => { /* network blip — ignore */ });
       });
 
-      // Forward resize
+      // ---- resize ----
       const sendResize = () => {
         const id = aliveIdRef.current;
         if (!id || !fitRef.current || !termRef.current) return;
@@ -124,19 +187,14 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
       ro.observe(container);
       roRef.current = ro;
 
-      // Resolve which terminal id we'll be watching
+      // ---- spawn or attach ----
       let id = aliveIdRef.current;
       if (!id) {
-        // Spawn one for this cwd
         try {
           const res = await fetch("/api/terminal", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              cwd,
-              cols: term.cols,
-              rows: term.rows,
-            }),
+            body: JSON.stringify({ cwd, cols: term.cols, rows: term.rows }),
           });
           if (!res.ok) {
             term.write(`\r\n\x1b[31mFailed to spawn terminal (HTTP ${res.status})\x1b[0m\r\n`);
@@ -149,9 +207,6 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
             requestedCwd?: string;
             fallbackReason?: string | null;
           };
-          // If the server couldn't chdir to what we asked for, show it now so
-          // the user sees the reason before the shell prompt — they'd otherwise
-          // wonder why they're in /workspace instead of their project.
           if (data.fallbackReason) {
             term.write(`\r\n\x1b[33m[terminal]\x1b[0m ${data.fallbackReason}\r\n`);
             term.write(`\x1b[33m[terminal]\x1b[0m running in ${data.cwd} instead of ${data.requestedCwd}\r\n\r\n`);
@@ -165,36 +220,39 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
         }
       }
 
-      // Connect SSE — re-using a single EventSource per terminal id
+      // ---- SSE ----
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
       const es = new EventSource(`/api/terminal/${encodeURIComponent(id)}/events`);
       es.onmessage = (e) => {
         if (!termRef.current) return;
         try {
-          const payload = JSON.parse(e.data) as { type?: string; data?: string; exitCode?: number };
+          const payload = JSON.parse(e.data) as {
+            type?: string;
+            data?: string;
+            exitCode?: number;
+            replay?: boolean;
+          };
           if (payload.type === "connected") return;
           if (payload.type === "data" && typeof payload.data === "string") {
             termRef.current.write(payload.data);
           }
           if (payload.type === "exit") {
-            termRef.current.write(`\r\n\x1b[2m[process exited${payload.exitCode != null ? ` with code ${payload.exitCode}` : ""}]\x1b[0m\r\n`);
-            es.close();
-            esRef.current = null;
+            isExitedRef.current = true;
+            termRef.current.write(
+              `\r\n\x1b[2m[process exited${payload.exitCode != null ? ` with code ${payload.exitCode}` : ""}]\x1b[0m\r\n` +
+              `\x1b[2m[Press \x1b[33mENTER\x1b[2m to restart, any other key to close]\x1b[0m\r\n`
+            );
           }
         } catch { /* ignore malformed */ }
       };
-      es.onerror = () => {
-        // EventSource auto-reconnects; nothing to do here
-      };
+      es.onerror = () => { /* EventSource auto-reconnects */ };
       esRef.current = es;
     }
 
     void setup();
-
     return cleanup;
-    // We intentionally only re-init when the terminalId or cwd changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalId, cwd]);
+  }, [terminalId, cwd, pasteToTerminal]);
 
   return (
     <div
