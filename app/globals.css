@@ -647,3 +647,27 @@ span.linenumber {
     max-width: 50vw;
   }
 }
+
+/* CRT terminal — green phosphor with scanlines + halo on the rendered glyphs */
+.terminal-crt {
+  /* faint horizontal scanlines, ~3% opacity */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.18) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+}
+/* Halo the rendered glyphs (xterm draws on a canvas) — apply the glow to
+   the canvas itself so we don't blur the surrounding panel chrome. */
+.terminal-crt .xterm-screen,
+.terminal-crt .xterm-screen canvas {
+  filter: drop-shadow(0 0 0.6px rgba(124, 252, 0, 0.55))
+          drop-shadow(0 0 1.6px rgba(124, 252, 0, 0.22));
+}
+/* Amber cursor pulses like a real CRT scan */
+.terminal-crt .xterm-cursor-layer .xterm-cursor {
+  box-shadow: 0 0 6px rgba(255, 176, 0, 0.65);
+}
+

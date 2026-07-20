@@ -8,6 +8,16 @@ export interface Tab {
   label: string;
   filePath: string;
   sourceSessionId?: string | null;
+  kind?: "file" | "terminal";
+}
+
+function TerminalIcon({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  );
 }
 
 interface Props {
@@ -58,7 +68,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
             }}
           >
             <span style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7, display: "flex", alignItems: "center" }}>
-              {getFileIcon(tab.label, 13)}
+              {tab.kind === "terminal" ? <TerminalIcon size={13} /> : getFileIcon(tab.label, 13)}
             </span>
             <span
               style={{
@@ -67,7 +77,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
                 flex: 1,
                 fontWeight: isActive ? 500 : 400,
               }}
-              title={tab.filePath}
+              title={tab.filePath || tab.label}
             >
               {tab.label}
             </span>

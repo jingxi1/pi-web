@@ -18,9 +18,22 @@ services:
     volumes:
       - ./data/pi-agent:/data/pi-agent
       - ./workspace:/workspace
+    env_file:
+      # 注入 .env.local（MINIMAX_CN_API_KEY 等）—— token-plan 接口需要
+      - .env.local
     environment:
       # GIT_REPO_URL: "https://github.com/your/repo.git"
       - PI_CODING_AGENT_DIR=/data/pi-agent
       - PORT=30141
       - HOSTNAME=0.0.0.0
+      # Docker Desktop injects host proxy vars into every container — force the
+      # correct one (matching what build-arg HTTP_PROXY used). Without this,
+      # the Next.js process inside the container can't reach api.minimaxi.com
+      # for the minimax-cn token-plan quota, etc.
+      - HTTP_PROXY=http://192.168.9.186:7890
+      - HTTPS_PROXY=http://192.168.9.186:7890
+      - http_proxy=http://192.168.9.186:7890
+      - https_proxy=http://192.168.9.186:7890
+      - NO_PROXY=localhost,127.0.0.1
+      - no_proxy=localhost,127.0.0.1
     restart: unless-stopped

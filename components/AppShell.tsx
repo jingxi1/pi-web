@@ -7,6 +7,7 @@ import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
+import { TerminalView } from "./TerminalView";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
@@ -162,6 +163,9 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  // tabId -> backend PTY id. Keyed on tabId so multiple terminal tabs can coexist
+  // (e.g. one per cwd) and survive tab switches.
+  const [terminalIds, setTerminalIds] = useState<Record<string, string>>({});
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -334,7 +338,43 @@ export function AppShell() {
     handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
   }, [handleOpenFile, selectedSession?.id]);
 
+  const handleOpenTerminal = useCallback(() => {
+    if (!activeCwd) return;
+    const tabId = `terminal:${activeCwd}`;
+    setFileTabs((prev) => {
+      const existing = prev.find((t) => t.id === tabId);
+      if (existing) return prev;
+      return [...prev, { id: tabId, label: "Terminal", filePath: "", kind: "terminal" }];
+    });
+    setActiveFileTabId(tabId);
+    setRightPanelOpen(true);
+    // On mobile the file panel is full-screen; close the drawer so it shows.
+    if (isMobile) setSidebarOpen(false);
+  }, [activeCwd, isMobile]);
+
+  const handleTerminalIdChange = useCallback((tabId: string, id: string) => {
+    setTerminalIds((prev) => ({ ...prev, [tabId]: id }));
+  }, []);
+
   const handleCloseFileTab = useCallback((tabId: string) => {
+    // Killing a terminal PTY is fire-and-forget — if it fails (already gone, etc.)
+    // we still drop the tab locally so the UI doesn't get stuck.
+    if (tabId.startsWith("terminal:")) {
+      const id = terminalIds[tabId];
+      if (id) {
+        void fetch(`/api/terminal/${encodeURIComponent(id)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "kill" }),
+        }).catch(() => { /* ignore */ });
+      }
+      setTerminalIds((prev) => {
+        if (!(tabId in prev)) return prev;
+        const next = { ...prev };
+        delete next[tabId];
+        return next;
+      });
+    }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (next.length === 0) setRightPanelOpen(false);
@@ -345,7 +385,7 @@ export function AppShell() {
       const remaining = fileTabs.filter((t) => t.id !== tabId);
       return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     });
-  }, [fileTabs]);
+  }, [fileTabs, terminalIds]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
@@ -441,6 +481,17 @@ export function AppShell() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="12 6 12 12 16 14" />
+              </svg>
+            ),
+          },
+          {
+            label: "Terminal",
+            onClick: handleOpenTerminal,
+            disabled: !activeCwd,
+            icon: (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="4 17 10 11 4 5" />
+                <line x1="12" y1="19" x2="20" y2="19" />
               </svg>
             ),
           },
@@ -1091,12 +1142,46 @@ export function AppShell() {
               onCloseTab={handleCloseFileTab}
             />
           </div>
-
+          <button
+            onClick={handleOpenTerminal}
+            disabled={!activeCwd}
+            title={activeCwd ? "Open terminal in current working directory" : "Select a project directory first"}
+            aria-label="Open terminal"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 32, height: 32, padding: 0, marginRight: 2,
+              background: "transparent", border: "none",
+              color: activeCwd ? "var(--text-muted)" : "var(--text-dim)",
+              cursor: activeCwd ? "pointer" : "not-allowed",
+              flexShrink: 0, borderRadius: 4,
+              opacity: activeCwd ? 1 : 0.45,
+              transition: "background 0.1s, color 0.1s",
+            }}
+            onMouseEnter={(e) => { if (activeCwd) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; } }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = activeCwd ? "var(--text-muted)" : "var(--text-dim)"; }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+          </button>
         </div>
 
         {/* File content */}
         <div style={{ flex: 1, overflow: "hidden" }}>
-          {activeFileTab?.filePath ? (
+          {activeFileTab?.kind === "terminal" ? (
+            activeCwd ? (
+              <TerminalView
+                cwd={activeCwd}
+                terminalId={terminalIds[activeFileTab.id] ?? null}
+                onTerminalId={(id) => handleTerminalIdChange(activeFileTab.id, id)}
+              />
+            ) : (
+              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
+                Select a project directory to open a terminal
+              </div>
+            )
+          ) : activeFileTab?.filePath ? (
             <FileViewer
               filePath={activeFileTab.filePath}
               cwd={activeCwd ?? undefined}
