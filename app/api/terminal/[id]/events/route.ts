@@ -1,4 +1,4 @@
-import { subscribe, getTerminal } from "@/lib/terminal-manager";
+import { subscribe, getTerminal, getScrollback } from "@/lib/terminal-manager";
 
 export const dynamic = "force-dynamic";
 
@@ -32,14 +32,19 @@ export async function GET(
       encode({ type: "connected", id });
 
       // Replay existing scrollback with a `replay: true` flag so the client
-      // can distinguish history from realtime output.
-      if (entry.scrollback.length > 0) {
+      // can distinguish history from realtime output and reset its screen
+      // before replaying.
+      const scrollback = getScrollback(entry);
+      if (scrollback.length > 0) {
         // Chunk the scrollback into ~4KB frames so EventSource / xterm aren't
         // flooded with one giant write on slow connections.
         const MAX_FRAME = 4096;
-        for (let i = 0; i < entry.scrollback.length; i += MAX_FRAME) {
-          encode({ type: "data", data: entry.scrollback.slice(i, i + MAX_FRAME), replay: true });
+        for (let i = 0; i < scrollback.length; i += MAX_FRAME) {
+          encode({ type: "data", data: scrollback.slice(i, i + MAX_FRAME), replay: true });
         }
+        // Marker so the client knows the replay is done and can stop
+        // resetting before subsequent realtime frames arrive.
+        encode({ type: "replay_end" });
       }
 
       const unsubscribe = subscribe(id, (chunk) => {

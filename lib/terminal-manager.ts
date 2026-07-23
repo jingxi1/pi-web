@@ -12,7 +12,8 @@ import { homedir, userInfo } from "os";
 
 interface TerminalEntry {
   pty: IPty;
-  scrollback: string;
+  scrollbackChunks: string[];
+  scrollbackLen: number;
   listeners: Set<(chunk: string) => void>;
   exited: boolean;
   exitCode: number | null;
@@ -31,6 +32,7 @@ declare global {
 }
 
 const SCROLLBACK_MAX = 200 * 1024; // 200 KB — enough for several screens
+const SCROLLBACK_TRIM_AT = 250 * 1024; // start trimming when scrollback exceeds this
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 30;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min — same order as session-idle
@@ -57,15 +59,104 @@ function getMap(): Map<string, TerminalEntry> {
   return globalThis.__piTerminals;
 }
 
+/**
+ * Append a chunk to the ring-style scrollback and trim the head when the
+ * total exceeds SCROLLBACK_TRIM_AT. O(amortised 1) per chunk — most pushes
+ * never trigger a trim; trims happen at most once per push.
+ *
+ * Why not a plain string? `scrollback += chunk` plus the 200 KB slice()
+ * every time we cross the limit is O(n) per over-limit push. With PTYs
+ * streaming large output (`npm install`, `find /`, `cat big.log`) this
+ * stalls the event loop for ~1–2 ms per slice, which on macOS manifests
+ * as visible lag in the SSE heartbeat and POST /input.
+ */
 function appendScrollback(entry: TerminalEntry, chunk: string) {
-  entry.scrollback += chunk;
-  if (entry.scrollback.length > SCROLLBACK_MAX) {
-    // Drop from the head — keep the tail so the most recent screen is visible
-    entry.scrollback = entry.scrollback.slice(entry.scrollback.length - SCROLLBACK_MAX);
+  if (chunk.length === 0) return;
+  // Edge case: a single chunk larger than the entire scrollback budget
+  // (theoretically possible if node-pty's libuv buffer drains into one
+  // onData callback after the process has been idle for a while). Slice
+  // it down before pushing so the trim loop below can handle it normally
+  // instead of bailing out because chunks.length === 1.
+  if (chunk.length > SCROLLBACK_MAX) {
+    chunk = chunk.slice(chunk.length - SCROLLBACK_MAX);
+  }
+  entry.scrollbackChunks.push(chunk);
+  entry.scrollbackLen += chunk.length;
+  if (entry.scrollbackLen <= SCROLLBACK_TRIM_AT) return;
+
+  while (entry.scrollbackLen > SCROLLBACK_MAX && entry.scrollbackChunks.length > 1) {
+    const head = entry.scrollbackChunks[0];
+    const overflow = entry.scrollbackLen - SCROLLBACK_MAX;
+    if (head.length <= overflow) {
+      // Drop the entire head chunk.
+      entry.scrollbackLen -= head.length;
+      entry.scrollbackChunks.shift();
+    } else {
+      // Trim the head chunk in place; we're now back at SCROLLBACK_MAX.
+      entry.scrollbackChunks[0] = head.slice(overflow);
+      entry.scrollbackLen -= overflow;
+      break;
+    }
   }
 }
 
-function resetIdleTimer(entry: TerminalEntry, id: string) {
+/**
+ * Materialise the scrollback to a single string. Called only when a new
+ * SSE subscriber needs the full history (e.g. on reconnect / page refresh),
+ * so the O(n) join cost is paid infrequently.
+ */
+export function getScrollback(entry: TerminalEntry): string {
+  return entry.scrollbackChunks.join("");
+}
+
+/**
+ * Build the env passed to every PTY we spawn. Centralised so spawnTerminal
+ * and continueTerminal can't drift.
+ *
+ * The interesting bits are the macOS hang-prevention vars:
+ *   GIT_TERMINAL_PROMPT=0  — git never blocks waiting for credentials
+ *   GIT_ASKPASS=           — empty so a stray .bashrc `git fetch` fails fast
+ *   GCM_INTERACTIVE=Never  — Git Credential Manager (cross-platform) quiet
+ *   PI_TERM_NO_KEYCHAIN=1  — marker our future diagnostics can read
+ *
+ * We deliberately do NOT clear SSH_AUTH_SOCK; users with explicit agents
+ * still want it. We only block the keychain *dialog* via the marker above.
+ */
+function buildPtyEnv(): Record<string, string> {
+  return {
+    ...(process.env as Record<string, string>),
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    HOME: process.env.HOME || homedir(),
+    USER: process.env.USER || userInfo().username || "user",
+    BASH_SILENCE_DEPRECATION: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "",
+    GCM_INTERACTIVE: "Never",
+    PI_TERM_NO_KEYCHAIN: "1",
+  };
+}
+
+/**
+ * Render the per-terminal rcfile that bash will source via `--rcfile`.
+ * Sources the user's interactive setup so nvm / conda / starship / brew
+ * shellenv / fzf etc. are actually available, then overrides PS1 to the
+ * amber ▸ for CRT consistency.
+ */
+function renderRcfile(): string {
+  return [
+    `for _pi_rc in "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do`,
+    `  if [ -f "$_pi_rc" ] && [ -r "$_pi_rc" ]; then`,
+    `    . "$_pi_rc" || true`,
+    `  fi`,
+    `done`,
+    `unset _pi_rc`,
+    `PS1='\\[\\033[33m\\]▸ \\[\\033[0m\\]'`,
+    `bind 'set show-all-if-ambiguous on' 2>/dev/null || true`,
+  ].join("\n") + "\n";
+}
+
+function resetIdleTimer(entry: TerminalEntry, _id: string) {
   if (entry.idleTimer) clearTimeout(entry.idleTimer);
   entry.idleTimer = setTimeout(() => {
     // Terminals persist until explicitly killed — no auto-cleanup here.
@@ -90,15 +181,7 @@ export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_R
   // callers). The HTTP route resolves before validating; this is the safety net.
   const { cwd: effectiveCwd, fallbackReason } = resolveCwd(cwd);
 
-  const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
-    TERM: "xterm-256color",
-    COLORTERM: "truecolor",
-    HOME: process.env.HOME || homedir(),
-    USER: process.env.USER || userInfo().username || "user",
-    // Suppress bash's interactive intro on first start
-    BASH_SILENCE_DEPRECATION: "1",
-  };
+  const env = buildPtyEnv();
 
   // Drop a per-terminal init file so we can override PS1 / behavior without
   // touching the user's `~/.bashrc`. bash's interactive startup reads
@@ -106,17 +189,7 @@ export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_R
   // an env-level PS1. `--rcfile` (per-shell) wins over both.
   const id = randomUUID();
   const rcPath = `/tmp/.pi-term-init-${id}`;
-  writeFileSync(
-    rcPath,
-    [
-      // Amber `▸ ` prompt — matches the rest of the CRT palette.
-      `PS1='\\[\\033[33m\\]▸ \\[\\033[0m\\]'`,
-      // Keep history, completion, etc. — the existing /etc/bash.bashrc is
-      // sourced by /etc/profile.d/*.sh which we don't bypass by using
-      // --rcfile. So just leave them and only override PS1 here.
-      `bind 'set show-all-if-ambiguous on' 2>/dev/null || true`,
-    ].join("\n") + "\n",
-  );
+  writeFileSync(rcPath, renderRcfile());
 
   const pty = spawn(shell, ["--rcfile", rcPath], {
     name: "xterm-256color",
@@ -128,9 +201,14 @@ export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_R
     useConpty: false,
   });
 
+  const initialBanner = fallbackReason
+    ? `\r\n\x1b[33m[terminal]\x1b[0m ${fallbackReason}\r\n\x1b[33m[terminal]\x1b[0m running in ${effectiveCwd} instead of ${cwd}\r\n\r\n`
+    : "";
+
   const entry: TerminalEntry = {
     pty,
-    scrollback: fallbackReason ? `\r\n\x1b[33m[terminal]\x1b[0m ${fallbackReason}\r\n\x1b[33m[terminal]\x1b[0m running in ${effectiveCwd} instead of ${cwd}\r\n\r\n` : "",
+    scrollbackChunks: initialBanner ? [initialBanner] : [],
+    scrollbackLen: initialBanner.length,
     listeners: new Set(),
     exited: false,
     exitCode: null,
@@ -265,12 +343,28 @@ export function resizeTerminal(id: string, cols: number, rows: number): boolean 
 export function killTerminal(id: string): boolean {
   const entry = getMap().get(id);
   if (!entry) return false;
+  // Remove from the map immediately so a new request sees the terminal as
+  // gone; we still hold the local `entry` reference for the SIGKILL fallback.
+  getMap().delete(id);
+  if (entry.idleTimer) clearTimeout(entry.idleTimer);
+
   try {
     entry.pty.kill();
-  } catch { /* ignore */ }
+  } catch { /* already gone */ }
+
+  // macOS quirk: when the user has `&`-backgrounded a child inside the PTY,
+  // the grand-child may hold the slave fd open. SIGHUP to the shell group
+  // then sits there forever because the master fd never sees EOF, the
+  // node-pty onData callback keeps firing (we keep appending scrollback and
+  // trimming it), and the whole event loop stalls. Escalate to SIGKILL after
+  // a short grace period.
+  const forceTimer = setTimeout(() => {
+    try { entry.pty.kill("SIGKILL"); } catch { /* gone */ }
+    try { unlinkSync(entry.rcPath); } catch { /* already gone */ }
+  }, 1500);
+  if (typeof forceTimer.unref === "function") forceTimer.unref();
+
   try { unlinkSync(entry.rcPath); } catch { /* already gone */ }
-  if (entry.idleTimer) clearTimeout(entry.idleTimer);
-  getMap().delete(id);
   return true;
 }
 
@@ -287,23 +381,10 @@ export function continueTerminal(id: string): boolean {
 
   // New init file for the fresh shell
   const newRcPath = `/tmp/.pi-term-init-${id}-${Date.now()}`;
-  writeFileSync(
-    newRcPath,
-    [
-      `PS1='\\[\\033[33m\\]▸ \\[\\033[0m\\]'`,
-      `bind 'set show-all-if-ambiguous on' 2>/dev/null || true`,
-    ].join("\n") + "\n",
-  );
+  writeFileSync(newRcPath, renderRcfile());
   entry.rcPath = newRcPath;
 
-  const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
-    TERM: "xterm-256color",
-    COLORTERM: "truecolor",
-    HOME: process.env.HOME || homedir(),
-    USER: process.env.USER || userInfo().username || "user",
-    BASH_SILENCE_DEPRECATION: "1",
-  };
+  const env = buildPtyEnv();
 
   const newPty = spawn(entry.shell, ["--rcfile", newRcPath], {
     name: "xterm-256color",

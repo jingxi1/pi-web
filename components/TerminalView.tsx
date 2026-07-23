@@ -174,15 +174,28 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
         if (!id || !fitRef.current || !termRef.current) return;
         const cols = termRef.current.cols;
         const rows = termRef.current.rows;
+        // Refuse 0x0 — node-pty's TIOCSWINSIZ rejects it on macOS and the
+        // internal state goes bad until the next good resize.
+        if (cols <= 0 || rows <= 0) return;
         void fetch(`/api/terminal/${encodeURIComponent(id)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "resize", cols, rows }),
         }).catch(() => { /* ignore */ });
       };
+      // Debounce: a drag of the panel splitter fires ResizeObserver on
+      // every animation frame, and each call would round-trip POST /
+      // resize to node-pty (SIOCSWINSIZ, which on macOS can stall for
+      // ~50–100 ms when contended). 120 ms is invisible to humans but
+      // cuts resize traffic ~10× during a drag.
+      let resizeTimer: ReturnType<typeof setTimeout> | null = null;
       const ro = new ResizeObserver(() => {
         try { fit.fit(); } catch { /* ignore */ }
-        sendResize();
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          resizeTimer = null;
+          sendResize();
+        }, 120);
       });
       ro.observe(container);
       roRef.current = ro;
@@ -221,10 +234,11 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
             requestedCwd?: string;
             fallbackReason?: string | null;
           };
-          if (data.fallbackReason) {
-            term.write(`\r\n\x1b[33m[terminal]\x1b[0m ${data.fallbackReason}\r\n`);
-            term.write(`\x1b[33m[terminal]\x1b[0m running in ${data.cwd} instead of ${data.requestedCwd}\r\n\r\n`);
-          }
+          // Note: the fallbackReason banner is intentionally NOT written
+          // here directly. The backend seeds the scrollback with the same
+          // banner in spawnTerminal(), and the SSE replay (see below) will
+          // hard-reset the screen and replay it. Writing it here too would
+          // produce a visible flash where the first copy is wiped by reset().
           id = data.id;
           aliveIdRef.current = id;
           onTerminalId(id);
@@ -237,6 +251,13 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
       // ---- SSE ----
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
       const es = new EventSource(`/api/terminal/${encodeURIComponent(id)}/events`);
+      // EventSource auto-reconnects after transient drops, and our backend
+      // re-sends the full scrollback with `replay:true` on every (re)connect.
+      // Without this flag the client would append the replay on top of the
+      // already-displayed history — visually a flash and CPU-wise a full
+      // xterm.js re-parse of the scrollback. Track connected/replay so we
+      // hard-reset the screen on each (re)connect.
+      let expectingReplay = false;
       es.onmessage = (e) => {
         if (!termRef.current) return;
         try {
@@ -246,11 +267,26 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
             exitCode?: number;
             replay?: boolean;
           };
-          if (payload.type === "connected") return;
+          if (payload.type === "connected") {
+            expectingReplay = true;
+            return;
+          }
           if (payload.type === "data" && typeof payload.data === "string") {
+            if (expectingReplay) {
+              // Hard reset: clear visible screen AND scrollback so we replay
+              // the server's authoritative history from a clean slate.
+              // `reset()` is cheaper than `clear()` + scrollback trim and
+              // matches the server's scrollback as the source of truth.
+              termRef.current.reset();
+              expectingReplay = false;
+            }
             termRef.current.write(payload.data);
           }
+          if (payload.type === "replay_end") {
+            expectingReplay = false;
+          }
           if (payload.type === "exit") {
+            expectingReplay = false;
             isExitedRef.current = true;
             termRef.current.write(
               `\r\n\x1b[2m[process exited${payload.exitCode != null ? ` with code ${payload.exitCode}` : ""}]\x1b[0m\r\n` +
