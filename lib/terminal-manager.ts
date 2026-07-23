@@ -1,8 +1,7 @@
 import { randomUUID } from "crypto";
 import { spawn, type IPty } from "node-pty";
-import { existsSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from "fs";
+import { existsSync, writeFileSync, unlinkSync } from "fs";
 import { homedir, userInfo } from "os";
-import { basename } from "path";
 
 // ============================================================================
 // PTY registry — mirrors lib/rpc-manager.ts patterns:
@@ -23,10 +22,8 @@ interface TerminalEntry {
   shell: string;
   cols: number;
   rows: number;
-  /** Path to this PTY's --rcfile (bash) or ZDOTDIR (zsh). Cleaned up on exit / kill. */
+  /** Path to this PTY's --rcfile (cleaned up on exit / kill). */
   rcPath: string;
-  /** For zsh: the directory we created at $ZDOTDIR (also cleaned up). */
-  zdotdir?: string;
 }
 
 declare global {
@@ -146,9 +143,8 @@ function buildPtyEnv(): Record<string, string> {
  * shellenv / fzf etc. are actually available, then overrides PS1 to the
  * amber ▸ for CRT consistency.
  */
-function renderBashRcfile(): string {
+function renderRcfile(): string {
   return [
-    `# Source user's interactive setup (nvm, conda, starship, brew shellenv, fzf)`,
     `for _pi_rc in "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do`,
     `  if [ -f "$_pi_rc" ] && [ -r "$_pi_rc" ]; then`,
     `    . "$_pi_rc" || true`,
@@ -157,30 +153,6 @@ function renderBashRcfile(): string {
     `unset _pi_rc`,
     `PS1='\\[\\033[33m\\]▸ \\[\\033[0m\\]'`,
     `bind 'set show-all-if-ambiguous on' 2>/dev/null || true`,
-  ].join("\n") + "\n";
-}
-
-/**
- * Render the zsh rcfile. zsh doesn't have a `--rcfile` flag — it always
- * sources `$ZDOTDIR/.zshrc` for interactive shells. The caller points
- * ZDOTDIR at a per-terminal directory (see spawnTerminal) and drops this
- * file there as `.zshrc`.
- */
-function renderZshRcfile(): string {
-  return [
-    `# Source user's interactive setup (nvm, conda, starship, brew shellenv, fzf)`,
-    `for _pi_rc in "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.zprofile" "$HOME/.profile"; do`,
-    `  if [ -f "$_pi_rc" ] && [ -r "$_pi_rc" ]; then`,
-    `    source "$_pi_rc" || true`,
-    `  fi`,
-    `done`,
-    `unset _pi_rc`,
-    `# Amber ▸ prompt — %F{220} is roughly the same hue as the bash version's \\033[33m`,
-    `PROMPT='%F{220}▸%f '`,
-    `# macOS ships a /etc/zshrc that only sets up completion when run under`,
-    `# Apple Terminal; force compinit so tab-completion works in our PTY.`,
-    `autoload -Uz compinit && compinit -u 2>/dev/null || true`,
-    `bindkey '^[[Z' reverse-menu-complete 2>/dev/null || true`,
   ].join("\n") + "\n";
 }
 
@@ -201,8 +173,7 @@ export interface SpawnResult {
 }
 
 export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_ROWS): SpawnResult {
-  // Linux/Docker first, Windows fallback for dev. macOS Catalina+ defaults
-  // SHELL to /bin/zsh — zsh is handled below via ZDOTDIR instead of --rcfile.
+  // Linux/Docker first, Windows fallback for dev
   const shell = process.env.SHELL
     ?? (process.platform === "win32" ? (process.env.COMSPEC || "powershell.exe") : "/bin/bash");
 
@@ -211,35 +182,16 @@ export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_R
   const { cwd: effectiveCwd, fallbackReason } = resolveCwd(cwd);
 
   const env = buildPtyEnv();
+
+  // Drop a per-terminal init file so we can override PS1 / behavior without
+  // touching the user's `~/.bashrc`. bash's interactive startup reads
+  // /etc/bash.bashrc + ~/.bashrc, which set their own PS1 and would override
+  // an env-level PS1. `--rcfile` (per-shell) wins over both.
   const id = randomUUID();
-  const shellName = basename(shell);
+  const rcPath = `/tmp/.pi-term-init-${id}`;
+  writeFileSync(rcPath, renderRcfile());
 
-  // Per-shell init strategy. bash has `--rcfile FILE`; zsh reads
-  // $ZDOTDIR/.zshrc; sh/fish/others we leave alone.
-  //
-  // Without this branch, calling `/bin/zsh --rcfile FILE` either gets
-  // treated as an unknown option (zsh prints "unknown option" to stderr
-  // and exits non-zero on some builds) or silently ignored depending on
-  // zsh version — either way, the PTY is unusable on stock macOS.
-  let shellArgs: string[];
-  let rcPath = "";
-  let zdotdir: string | undefined;
-  if (shellName === "bash" || shellName.endsWith("/bash")) {
-    rcPath = `/tmp/.pi-term-init-${id}`;
-    writeFileSync(rcPath, renderBashRcfile());
-    shellArgs = ["--rcfile", rcPath];
-  } else if (shellName === "zsh" || shellName.endsWith("/zsh")) {
-    zdotdir = `/tmp/.pi-term-zsh-${id}`;
-    mkdirSync(zdotdir, { recursive: true });
-    writeFileSync(`${zdotdir}/.zshrc`, renderZshRcfile());
-    // Override where zsh looks for its interactive rcfile.
-    env.ZDOTDIR = zdotdir;
-    shellArgs = [];
-  } else {
-    shellArgs = [];
-  }
-
-  const pty = spawn(shell, shellArgs, {
+  const pty = spawn(shell, ["--rcfile", rcPath], {
     name: "xterm-256color",
     cols,
     rows,
@@ -261,7 +213,6 @@ export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_R
     exited: false,
     exitCode: null,
     idleTimer: null,
-    zdotdir,
     cwd: effectiveCwd,
     shell,
     cols,
@@ -280,11 +231,8 @@ export function spawnTerminal(cwd: string, cols = DEFAULT_COLS, rows = DEFAULT_R
     entry.exited = true;
     entry.exitCode = exitCode;
     // Drop the per-terminal init file — node-pty's shell is gone, no one will
-    // source it again. For zsh, also wipe the per-terminal ZDOTDIR we made.
-    try { unlinkSync(entry.rcPath); } catch { /* gone */ }
-    if (entry.zdotdir) {
-      try { rmSync(entry.zdotdir, { recursive: true, force: true }); } catch { /* gone */ }
-    }
+    // source it again.
+    try { unlinkSync(rcPath); } catch { /* gone */ }
     // Tell subscribers the shell is gone — they decide what to render
     for (const cb of entry.listeners) {
       try { cb("\n[process exited]\n"); } catch { /* ignore */ }
@@ -413,16 +361,10 @@ export function killTerminal(id: string): boolean {
   const forceTimer = setTimeout(() => {
     try { entry.pty.kill("SIGKILL"); } catch { /* gone */ }
     try { unlinkSync(entry.rcPath); } catch { /* already gone */ }
-    if (entry.zdotdir) {
-      try { rmSync(entry.zdotdir, { recursive: true, force: true }); } catch { /* gone */ }
-    }
   }, 1500);
   if (typeof forceTimer.unref === "function") forceTimer.unref();
 
   try { unlinkSync(entry.rcPath); } catch { /* already gone */ }
-  if (entry.zdotdir) {
-    try { rmSync(entry.zdotdir, { recursive: true, force: true }); } catch { /* gone */ }
-  }
   return true;
 }
 
@@ -434,37 +376,17 @@ export function continueTerminal(id: string): boolean {
   const entry = getMap().get(id);
   if (!entry || !entry.exited) return false;
 
-  // Clean up old rc file + zdotdir from the previous shell instance.
+  // Clean up old rc file
   try { unlinkSync(entry.rcPath); } catch { /* gone */ }
-  if (entry.zdotdir) {
-    try { rmSync(entry.zdotdir, { recursive: true, force: true }); } catch { /* gone */ }
-  }
+
+  // New init file for the fresh shell
+  const newRcPath = `/tmp/.pi-term-init-${id}-${Date.now()}`;
+  writeFileSync(newRcPath, renderRcfile());
+  entry.rcPath = newRcPath;
 
   const env = buildPtyEnv();
-  const shellName = basename(entry.shell);
 
-  // Mirror spawnTerminal's per-shell init strategy (bash --rcfile / zsh ZDOTDIR).
-  let shellArgs: string[];
-  let newRcPath = "";
-  let newZdotdir: string | undefined;
-  if (shellName === "bash" || shellName.endsWith("/bash")) {
-    newRcPath = `/tmp/.pi-term-init-${id}-${Date.now()}`;
-    writeFileSync(newRcPath, renderBashRcfile());
-    shellArgs = ["--rcfile", newRcPath];
-  } else if (shellName === "zsh" || shellName.endsWith("/zsh")) {
-    newZdotdir = `/tmp/.pi-term-zsh-${id}-${Date.now()}`;
-    mkdirSync(newZdotdir, { recursive: true });
-    writeFileSync(`${newZdotdir}/.zshrc`, renderZshRcfile());
-    env.ZDOTDIR = newZdotdir;
-    shellArgs = [];
-  } else {
-    shellArgs = [];
-  }
-
-  entry.rcPath = newRcPath;
-  entry.zdotdir = newZdotdir;
-
-  const newPty = spawn(entry.shell, shellArgs, {
+  const newPty = spawn(entry.shell, ["--rcfile", newRcPath], {
     name: "xterm-256color",
     cols: entry.cols,
     rows: entry.rows,
@@ -484,10 +406,7 @@ export function continueTerminal(id: string): boolean {
   newPty.onExit(({ exitCode }) => {
     entry.exited = true;
     entry.exitCode = exitCode;
-    try { unlinkSync(entry.rcPath); } catch { /* gone */ }
-    if (entry.zdotdir) {
-      try { rmSync(entry.zdotdir, { recursive: true, force: true }); } catch { /* gone */ }
-    }
+    try { unlinkSync(newRcPath); } catch { /* gone */ }
     for (const cb of entry.listeners) {
       try { cb(`\n[process exited with code ${exitCode}]\n`); } catch { /* ignore */ }
     }
