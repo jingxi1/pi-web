@@ -43,8 +43,21 @@ export async function POST(req: NextRequest) {
   const cols = typeof body.cols === "number" && body.cols > 0 ? Math.floor(body.cols) : 120;
   const rows = typeof body.rows === "number" && body.rows > 0 ? Math.floor(body.rows) : 30;
 
-  const result = spawnTerminal(cwd, cols, rows);
-  return NextResponse.json({ ...result, requestedCwd: requested, fallbackReason });
+  try {
+    const result = spawnTerminal(cwd, cols, rows);
+    return NextResponse.json({ ...result, requestedCwd: requested, fallbackReason });
+  } catch (err) {
+    // Surface the real error to the client so the user can tell us what's
+    // actually failing on macOS (writeFileSync EACCES on /tmp, missing
+    // node-pty native binding, shell missing, etc.) instead of just seeing
+    // "HTTP 500".
+    const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error("[terminal] spawnTerminal failed:", err);
+    return NextResponse.json(
+      { error: message, stack: err instanceof Error ? err.stack : undefined },
+      { status: 500 },
+    );
+  }
 }
 
 /**

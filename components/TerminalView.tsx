@@ -224,7 +224,15 @@ export function TerminalView({ cwd, terminalId, onTerminalId }: Props) {
             body: JSON.stringify({ cwd, cols: term.cols, rows: term.rows }),
           });
           if (!res.ok) {
-            term.write(`\r\n\x1b[31mFailed to spawn terminal (HTTP ${res.status})\x1b[0m\r\n`);
+            // Read the body even on error so we can surface the real cause
+            // instead of a generic "HTTP 500". The server logs the full
+            // stack; this gives the user something actionable in the UI.
+            let detail = "";
+            try {
+              const errBody = await res.json() as { error?: string };
+              if (errBody.error) detail = `: ${errBody.error}`;
+            } catch { /* body wasn't JSON */ }
+            term.write(`\r\n\x1b[31mFailed to spawn terminal (HTTP ${res.status})${detail}\x1b[0m\r\n`);
             return;
           }
           const data = await res.json() as {
