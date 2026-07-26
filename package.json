@@ -29,6 +29,7 @@
     "build": "next build --webpack",
     "start": "next start -p 30141",
     "lint": "eslint .",
+    "postinstall": "find node_modules/node-pty/prebuilds -name spawn-helper -exec chmod +x {} \\;",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
