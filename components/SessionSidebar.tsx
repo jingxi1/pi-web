@@ -355,6 +355,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const [favoriteSessionIds, setFavoriteSessionIds] = useState<Set<string>>(() => new Set());
   const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<"sessions" | "favorites">("sessions");
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
@@ -1509,11 +1510,49 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
+      {/* Sidebar tabs */}
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 4px" }}>
+        <button
+          onClick={() => setSidebarTab("sessions")}
+          style={{
+            padding: "8px 10px",
+            color: sidebarTab === "sessions" ? "var(--accent)" : "var(--text-muted)",
+            background: "none",
+            border: "none",
+            borderBottom: "2px solid",
+            borderBottomColor: sidebarTab === "sessions" ? "var(--accent)" : "transparent",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 500,
+            transition: "color 0.15s, border-color 0.15s",
+          }}
+        >
+          会话 ({allSessions.length})
+        </button>
+        <button
+          onClick={() => setSidebarTab("favorites")}
+          style={{
+            padding: "8px 10px",
+            color: sidebarTab === "favorites" ? "var(--accent)" : "var(--text-muted)",
+            background: "none",
+            border: "none",
+            borderBottom: "2px solid",
+            borderBottomColor: sidebarTab === "favorites" ? "var(--accent)" : "transparent",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 500,
+            transition: "color 0.15s, border-color 0.15s",
+          }}
+        >
+          收藏 ({favoriteSessions.length})
+        </button>
+      </div>
+
       {/* Favorites panel — shows favorited sessions from any project, so the
           user can jump back to them regardless of the current project filter.
           Only rendered when there are favorites (matching the RUNNING panel's
           visibility logic), so the sidebar stays uncluttered by default. */}
-      {favoriteSessions.length > 0 && (
+      {sidebarTab === "favorites" && favoriteSessions.length > 0 && (
         <div
           style={{
             borderTop: "1px solid var(--border)",
@@ -1585,6 +1624,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       )}
 
       {/* Session list */}
+      {sidebarTab === "sessions" && (
       <div style={{ flex: (explorerOpen && (selectedCwdProp || selectedCwd)) || (runningPanelOpen && (runningSessions.length > 0 || waitingSchedules.length > 0)) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
@@ -1620,6 +1660,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           />
         ))}
       </div>
+      )}
 
       {/* Running sessions section — only rendered when there's at least one
           session currently working OR waiting for a quota reset, so the panel
