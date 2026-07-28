@@ -1812,6 +1812,28 @@ function UnreadSessionIndicator() {
   );
 }
 
+function FavoriteIndicator() {
+  return (
+    <span
+      title="Favorited"
+      aria-label="Favorited session"
+      style={{
+        width: 14,
+        height: 14,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "#f59e0b",
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "block" }}>
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      </svg>
+    </span>
+  );
+}
+
 function SessionItem({
   session,
   isSelected,
@@ -1936,6 +1958,11 @@ function SessionItem({
         <>
           <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })}
+            {isFavorite && (
+              <div style={{ color: "#f59e0b", fontSize: 11, fontWeight: 500, marginTop: 1 }}>
+                ★ Favorited. Will unpin from sidebar.
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
             <button
@@ -2025,6 +2052,7 @@ function SessionItem({
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
+              {isFavorite && <FavoriteIndicator />}
             </div>
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
               {isRunning ? (
