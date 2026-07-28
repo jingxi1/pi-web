@@ -10,15 +10,12 @@ import { TabBar, type Tab } from "./TabBar";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
-import { NotifyConfig } from "./NotifyConfig";
-import { ScheduledTasksConfig } from "./ScheduledTasksConfig";
-import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
+import { OpenClawIntegration } from "./openclaw-integration";
 import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useNotify } from "@/hooks/useNotify";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
@@ -46,7 +43,6 @@ export function AppShell() {
   const { locale, setLocale, t: translate, supportedLocales } = useI18n();
   const isMobile = useIsMobile();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
-  useNotify();
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
   const [initialCwdStatus, setInitialCwdStatus] = useState<"idle" | "validating" | "ready" | "error">(
@@ -60,8 +56,6 @@ export function AppShell() {
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [skillsConfigOpen, setSkillsConfigOpen] = useState(false);
   const [pluginsConfigOpen, setPluginsConfigOpen] = useState(false);
-  const [notifyConfigOpen, setNotifyConfigOpen] = useState(false);
-  const [tasksConfigOpen, setTasksConfigOpen] = useState(false);
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
@@ -610,28 +604,6 @@ export function AppShell() {
               </svg>
             ),
           },
-          {
-            label: "Notify",
-            onClick: () => setNotifyConfigOpen(true),
-            disabled: false,
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-              </svg>
-            ),
-          },
-          {
-            label: "Tasks",
-            onClick: () => setTasksConfigOpen(true),
-            disabled: false,
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-            ),
-          },
         ] as { label: string; onClick: () => void; disabled: boolean; icon: React.ReactNode }[]).map(({ label, onClick, disabled, icon }) => (
           <button
             key={label}
@@ -652,6 +624,7 @@ export function AppShell() {
             {label}
           </button>
         ))}
+        <div id="openclaw-toolbar-slot" style={{ display: "flex", gap: 5, alignItems: "center" }} />
       </div>
     </>
   );
@@ -1564,13 +1537,7 @@ export function AppShell() {
         onReloaded={() => setSessionKey((k) => k + 1)}
       />
     )}
-    {notifyConfigOpen && (
-      <NotifyConfig onClose={() => setNotifyConfigOpen(false)} />
-    )}
-    {tasksConfigOpen && (
-      <ScheduledTasksConfig onClose={() => setTasksConfigOpen(false)} />
-    )}
-    <MinimaxTokenPlanBar enabled={true} />
+    <OpenClawIntegration />
     </>
   );
 }
