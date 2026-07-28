@@ -2154,6 +2154,28 @@ function WaitingSessionIndicator() {
   );
 }
 
+function FavoriteIndicator() {
+  return (
+    <span
+      title="Favorited"
+      aria-label="Favorited session"
+      style={{
+        width: 14,
+        height: 14,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "#f59e0b",
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "block" }}>
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      </svg>
+    </span>
+  );
+}
+
 function formatRemainingMs(ms: number): string {
   if (ms <= 0) return "any moment";
   const totalSec = Math.floor(ms / 1000);
@@ -2395,7 +2417,14 @@ function SessionItem({
                 {t("sidebar.stillDelete")} <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 18)}{title.length > 18 ? "…" : ""}&rdquo;</span>?
               </>
             ) : (
-              t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })
+              <>
+                {t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })}
+                {isFavorite && (
+                  <div style={{ color: "#f59e0b", fontSize: 11, fontWeight: 500, marginTop: 1 }}>
+                    ★ Favorited. Will unpin from sidebar.
+                  </div>
+                )}
+              </>
             )}
           </div>
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
@@ -2496,6 +2525,7 @@ title={
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
+              {isFavorite && <FavoriteIndicator />}
             </div>
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
               {isRunning ? (
