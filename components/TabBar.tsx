@@ -2,22 +2,14 @@
 
 import { useState } from "react";
 import { getFileIcon } from "./FileIcons";
+import { useI18n } from "@/hooks/useI18n";
 
 export interface Tab {
   id: string;
   label: string;
   filePath: string;
   sourceSessionId?: string | null;
-  kind?: "file" | "terminal";
-}
-
-function TerminalIcon({ size = 13 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <polyline points="4 17 10 11 4 5" />
-      <line x1="12" y1="19" x2="20" y2="19" />
-    </svg>
-  );
+  initialDisplayMode?: "source" | "preview" | "diff";
 }
 
 interface Props {
@@ -28,6 +20,7 @@ interface Props {
 }
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
+  const { t } = useI18n();
   const [hoveredClose, setHoveredClose] = useState<string | null>(null);
 
   return (
@@ -47,6 +40,15 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
           <div
             key={tab.id}
             onClick={() => onSelectTab(tab.id)}
+            onMouseDown={(e) => {
+              if (e.button === 1) e.preventDefault();
+            }}
+            onAuxClick={(e) => {
+              if (e.button !== 1) return;
+              e.preventDefault();
+              e.stopPropagation();
+              onCloseTab(tab.id);
+            }}
             style={{
               display: "flex",
               alignItems: "center",
@@ -68,7 +70,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
             }}
           >
             <span style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7, display: "flex", alignItems: "center" }}>
-              {tab.kind === "terminal" ? <TerminalIcon size={13} /> : getFileIcon(tab.label, 13)}
+              {getFileIcon(tab.label, 13)}
             </span>
             <span
               style={{
@@ -77,7 +79,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
                 flex: 1,
                 fontWeight: isActive ? 500 : 400,
               }}
-              title={tab.filePath || tab.label}
+              title={tab.filePath}
             >
               {tab.label}
             </span>
@@ -97,8 +99,8 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
                 flexShrink: 0,
                 transition: "background 0.1s, color 0.1s",
               }}
-              title="Close"
-              aria-label={`Close ${tab.label}`}
+               title={t("i18n.close")}
+               aria-label={`${t("i18n.close")} ${tab.label}`}
             >
               <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
                 <line x1="2" y1="2" x2="8" y2="8" />

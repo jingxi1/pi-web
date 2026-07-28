@@ -19,8 +19,8 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Pi Agent Web",
-  description: "Pi Coding Agent Web Interface",
+  title: "Pi Web",
+  description: "Pi Web interface for the pi coding agent",
 };
 
 export const viewport = {
