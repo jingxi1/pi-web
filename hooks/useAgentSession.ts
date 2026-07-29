@@ -7,11 +7,16 @@ import type {
   ExtensionUiRequest,
   ExtensionWidgetItem,
   SessionInfo,
+  SessionMessageEntry,
   SessionTreeNode,
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
+import { emitNotifyEvent } from "@/lib/notify-emitter";
+import { isQuotaError } from "@/lib/quota-error";
+import { autoResumeStore } from "@/lib/auto-resume-store";
+import { toast } from "@/components/Toast";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
 export interface SessionData {
@@ -381,6 +386,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const executeBashRef = useRef<(command: string, excludeFromContext: boolean) => Promise<void> | undefined>(undefined);
   const userScrollIntentUntilRef = useRef(0);
   const ignoreProgrammaticScrollUntilRef = useRef(0);
+  // Last user-sent prompt for this session — used by the quota auto-resume
+  // path to replay the message when the upstream token bucket resets.
+  const lastPromptRef = useRef<string>("");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const ensuringNewSessionRef = useRef<Promise<string | null> | null>(null);
@@ -912,14 +920,72 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             .catch(() => {});
         }
         onAgentEnd?.();
+        // === notify: emit agentEnd event ===
+        {
+          const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+          const summary = lastAssistant
+            ? extractMessageText(lastAssistant).slice(0, 200) || "(empty response)"
+            : "Task finished";
+          emitNotifyEvent({
+            type: "agentEnd",
+            sessionId: sessionIdRef.current,
+            sessionName: session?.name ?? null,
+            summary,
+          });
+        }
         break;
       case "prompt_done":
         if (!agentRunningRef.current) break;
         void finishPromptWithoutStream(sessionIdRef.current);
         break;
-      case "prompt_error":
-        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
+      case "prompt_error": {
+        const errMsg = (event.errorMessage as string | undefined) ?? "Command failed";
+        addNotice({ type: "error", message: errMsg });
+        // === notify: emit error event ===
+        emitNotifyEvent({
+          type: "error",
+          sessionId: sessionIdRef.current,
+          sessionName: session?.name ?? null,
+          summary: errMsg,
+        });
+        // Schedule auto-resume if this is a quota/billing error and the current
+        // session has a stored prompt we can replay after the token bucket
+        // resets. Other (retryable) errors fall through to the SDK's own
+        // retry path which already handles 429/5xx/network in seconds.
+        if (isQuotaError(errMsg)) {
+          const sid = sessionIdRef.current;
+          const providerId = displayModel?.provider ?? null;
+          const lastPrompt = lastPromptRef.current;
+          if (sid && providerId && lastPrompt) {
+            void fetch(`/api/token-plan/${providerId}`, { cache: "no-store" })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((body: { categories?: Array<{ name: string; intervalPercent: number; available: boolean; intervalResetsIn: string }> } | null) => {
+                if (!body?.categories) return;
+                const general = body.categories.find((c) => c.name === "general");
+                const secsFromString = (s: string): number => {
+                  const m = s.match(/^(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?$/);
+                  if (!m) return 0;
+                  const [, d, h, mm] = m;
+                  return (Number(d) || 0) * 86400 + (Number(h) || 0) * 3600 + (Number(mm) || 0) * 60;
+                };
+                const resetSec = general ? secsFromString(general.intervalResetsIn) : 0;
+                const wakesAt = Date.now() + (resetSec > 0 ? resetSec * 1000 : 30 * 60 * 1000);
+                autoResumeStore.schedule({ sessionId: sid, providerId, lastPrompt, wakesAt, createdAt: Date.now() });
+              })
+              .catch(() => {
+                // Fallback: schedule 30 min ahead if token-plan endpoint fails.
+                autoResumeStore.schedule({
+                  sessionId: sid,
+                  providerId,
+                  lastPrompt,
+                  wakesAt: Date.now() + 30 * 60 * 1000,
+                  createdAt: Date.now(),
+                });
+              });
+          }
+        }
         break;
+      }
       case "extension_error":
         addNotice({
           type: "error",
@@ -1022,17 +1088,41 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (sessionIdRef.current) loadSession(sessionIdRef.current);
         }
         break;
-      case "extension_ui_request":
-        handleExtensionUiRequest(event as ExtensionUiRequest);
+      case "extension_ui_request": {
+        const req = event as ExtensionUiRequest;
+        handleExtensionUiRequest(req);
+        // === notify: emit inputNeeded event for user-interactive requests ===
+        if (req.method === "select" || req.method === "confirm" || req.method === "input" || req.method === "editor") {
+          const summary = req.method === "select"
+            ? `${req.title} (select from ${req.options.length} options)`
+            : req.method === "confirm"
+              ? req.title
+              : req.method === "input"
+                ? req.title
+                : req.title;
+          emitNotifyEvent({
+            type: "inputNeeded",
+            sessionId: sessionIdRef.current,
+            sessionName: session?.name ?? null,
+            summary,
+            detail: req.method === "confirm" ? req.message : undefined,
+          });
+        }
         break;
+      }
     }
-  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
+  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, messages, onAgentEnd, session]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
     if (agentRunningRef.current || bashRunningRef.current) return;
+    // User is taking over manually — clear any pending auto-resume for this
+    // session so we don't double-fire later.
+    const sidForCancel = sessionIdRef.current;
+    if (sidForCancel) autoResumeStore.cancel(sidForCancel);
+    lastPromptRef.current = trimmedMessage;
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
 
     const isBashCommand = !images?.length && trimmedMessage.startsWith("!");
@@ -1155,6 +1245,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, ensureNewSession, loadSession, opts.chatInputRef, promoteNewSession, session]);
   executeBashRef.current = executeBash;
 
+  // Re-send the last user prompt for this session if an auto-resume schedule
+  // exists. Called by the auto-resume store when the quota token bucket resets.
+  const triggerResume = useCallback(async (sessionId: string, prompt: string) => {
+    if (sessionIdRef.current !== sessionId) return;
+    if (agentRunningRef.current) return;
+    if (!prompt) return;
+    await handleSend(prompt);
+  }, [handleSend]);
+
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -1179,16 +1278,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid) return;
     setForkingEntryId(entryId);
     try {
-      const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string }>(sid, {
+      const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string; firstUserMessage?: string }>(sid, {
         type: "fork",
         entryId,
       });
-      const { cancelled, newSessionId } = result ?? {};
+      const { cancelled, newSessionId, firstUserMessage } = result ?? {};
       if (!cancelled && newSessionId) {
         onSessionForked?.(newSessionId);
+        const preview = (firstUserMessage ?? "new session").slice(0, 48);
+        toast.success(
+          `Forked → “${preview}${firstUserMessage && firstUserMessage.length > 48 ? "…" : ""}”`,
+          {
+            duration: 6000,
+            action: {
+              label: "Switch to it",
+              onClick: () => onSessionForked?.(newSessionId),
+            },
+          },
+        );
       }
     } catch (e) {
       console.error("Fork failed:", e);
+      toast.error("Fork failed. Check the dev console for details.");
     } finally {
       setForkingEntryId(null);
     }
@@ -1213,6 +1324,57 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch(() => {});
     }
   }, [loadContext]);
+
+  // The "root" user message is the original first user message in the session.
+  // Walking the projected tree's top-level nodes and picking the first one that
+  // is a user message gives us the entry id that, when passed to navigate_tree,
+  // resets the LLM's view to "empty" while keeping all old entries in the file
+  // as unreachable history (recoverable via BranchNavigator).
+  const rootUserMessageId = useMemo<string | null>(() => {
+    const tree = data?.tree;
+    if (!tree || tree.length === 0) return null;
+    for (const node of tree) {
+      const entry = node.entry;
+      if (entry && entry.type === "message") {
+        const msg = (entry as SessionMessageEntry).message as { role?: string } | undefined;
+        if (msg?.role === "user") return entry.id;
+      }
+    }
+    return null;
+  }, [data?.tree]);
+
+  // We are "at root" when the active leaf is the root user message itself, or
+  // when the loaded context has no messages (post-reset state).
+  const atRoot = useMemo(() => {
+    if (!rootUserMessageId) return false;
+    if (messages.length === 0) return true;
+    if (activeLeafId === rootUserMessageId) return true;
+    // entryIds[0] is the entry id of the first displayed message at this leaf.
+    // If it equals the root user message id, the leaf is at the root.
+    if (entryIds[0] === rootUserMessageId) return true;
+    return false;
+  }, [rootUserMessageId, messages.length, activeLeafId, entryIds]);
+
+  // Reset is only allowed when there is something to reset to: an existing
+  // session with a root user message, currently not streaming/compacting, and
+  // the leaf is not already at the root.
+  const canResetContext = useMemo(() => {
+    if (isNew) return false;
+    if (!rootUserMessageId) return false;
+    if (atRoot) return false;
+    if (streamState.isStreaming) return false;
+    if (isCompacting) return false;
+    if (agentRunning) return false;
+    return true;
+  }, [isNew, rootUserMessageId, atRoot, streamState.isStreaming, isCompacting, agentRunning]);
+
+  // Drives the "reset to start" action. Goes through handleNavigate so we get
+  // the same optimistic UI update + RPC broadcast as branch switching.
+  const handleResetContext = useCallback(async () => {
+    if (!rootUserMessageId) return;
+    await handleNavigate(rootUserMessageId);
+    toast.success("Context reset");
+  }, [handleNavigate, rootUserMessageId]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
     if (isNew) {
@@ -1604,6 +1766,30 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return () => clearTimeout(t);
   }, [compactResult]);
 
+  // Register this session as the auto-resume target for its current provider.
+  // When the token-plan polling hook detects a reset, the store fires entries
+  // for that provider and our handler triggers a re-send for the matching one.
+  // The active session resumes locally via triggerResume; non-active sessions
+  // resume server-side via the existing /api/agent/[id] POST endpoint, which
+  // spins up the agent's RPC session and forwards the prompt without needing
+  // an active SSE listener on this tab. Switching back to such a session
+  // later picks up the in-flight events via SSE reconnection.
+  useEffect(() => {
+    const providerId = displayModel?.provider;
+    if (!providerId) return;
+    return autoResumeStore.registerFireHandler(providerId, (entry) => {
+      if (entry.sessionId === sessionIdRef.current) {
+        void triggerResume(entry.sessionId, entry.lastPrompt);
+        return;
+      }
+      void fetch(`/api/agent/${encodeURIComponent(entry.sessionId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "prompt", message: entry.lastPrompt }),
+      }).catch(() => {});
+    });
+  }, [displayModel?.provider, triggerResume]);
+
   useEffect(() => {
     if (noticeState.visible.length === 0) return;
     const exiting = noticeState.visible.find((notice) => notice.exiting);
@@ -1636,15 +1822,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     isNew,
+    // Reset-context derived state
+    rootUserMessageId, atRoot, canResetContext,
     // Refs
     sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
-    handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
+    triggerResume,
+    handleCompact, handleResetContext, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
     handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
+    scrollToBottom,
     dispatch, setAgentRunning, setForkingEntryId,
     bashRunning, pendingBash,
     // Subscriptions

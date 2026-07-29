@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { useTheme } from "@/hooks/useTheme";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { toggleShortcutsPanel } from "./ShortcutsPanel";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
+import { autoResumeStore, useAllAutoResumeSchedules, type Stored as AutoResumeSchedule } from "@/lib/auto-resume-store";
 
 declare global {
   interface Window {
@@ -89,6 +93,11 @@ interface Props {
   onExplorerRefresh?: () => void;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
   onAtMentions?: (relativePaths: string[]) => void;
+  /** Reset the current session's context in-place (navigate_tree to root). */
+  onResetContext?: () => void;
+  /** Whether the reset action is currently allowed (no session / streaming
+   *  / already at root all turn this off). */
+  canResetContext?: boolean;
 }
 
 interface WorktreeEntry {
@@ -262,16 +271,30 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
     if (s.parentSessionId) parentOf.set(s.id, s.parentSessionId);
   }
 
-  // Walk up the parentSessionId chain to find the nearest ancestor that exists in byId
+  // Memoized ancestor lookup. Each session is walked up the parent chain at
+  // most once across the entire build — the cached "ultimate root" is reused
+  // for every sibling in the same lineage, turning the previous O(n²) worst
+  // case (long fork chains where every node re-walks the whole stack) into
+  // a near-linear O(n) build.
+  const ancestorCache = new Map<string, string | null>();
   function resolveAncestor(id: string): string | null {
-    let cur = parentOf.get(id);
+    const cached = ancestorCache.get(id);
+    if (cached !== undefined) return cached;
+    let cur: string | undefined = parentOf.get(id);
     const visited = new Set<string>();
     while (cur) {
-      if (visited.has(cur)) return null; // cycle guard
+      if (visited.has(cur)) {
+        ancestorCache.set(id, null);
+        return null; // cycle guard
+      }
       visited.add(cur);
-      if (byId.has(cur)) return cur;
+      if (byId.has(cur)) {
+        ancestorCache.set(id, cur);
+        return cur;
+      }
       cur = parentOf.get(cur);
     }
+    ancestorCache.set(id, null);
     return null;
   }
 
@@ -382,8 +405,10 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onResetContext, canResetContext }: Props) {
   const { t } = useI18n();
+  const { isDark, toggleTheme } = useTheme();
+  const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -391,11 +416,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [homeDir, setHomeDir] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState("");
+  const [wtFilter, setWtFilter] = useState("");
   const [customPathOpen, setCustomPathOpen] = useState(false);
   const [customPathValue, setCustomPathValue] = useState("");
   const [customPathError, setCustomPathError] = useState<string | null>(null);
   const [customPathValidating, setCustomPathValidating] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Reset-context toolbar state — when set to "confirming", the toolbar morphs
+  // into a confirm/cancel pair so the destructive action needs two taps.
+  // Reverts on outside click or after 5s of inactivity.
+  const [resetPhase, setResetPhase] = useState<"idle" | "confirming">("idle");
+  const resetToolbarRef = useRef<HTMLDivElement>(null);
   // Worktree switcher state
   const [worktreeState, setWorktreeState] = useState<WorktreeState | null>(null);
   const [wtDropdownOpen, setWtDropdownOpen] = useState(false);
@@ -415,9 +446,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const [runningPanelOpen, setRunningPanelOpen] = useState(true);
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const [favoriteSessionIds, setFavoriteSessionIds] = useState<Set<string>>(() => new Set());
   const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<"sessions" | "favorites">("sessions");
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
@@ -441,6 +474,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       if (!sseAuthoritativeRef.current) {
         setRunningSessionIds(new Set(data.runningSessionIds ?? []));
       }
+      // Favorites are server-owned — the API response is the source of truth,
+      // so a stale local optimistic update gets re-aligned here.
+      setFavoriteSessionIds(new Set(data.favoriteSessionIds ?? []));
       // Drop unread markers for sessions that no longer exist (e.g. deleted).
       const existingIds = new Set(data.sessions.map((s) => s.id));
       setUnreadSessionIds((prev) => {
@@ -534,6 +570,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       if (d.home) setHomeDir(d.home);
     }).catch(() => {});
   }, []);
+
+  /**
+   * Optimistic favorite toggle: update local state immediately so the star
+   * flips without waiting for the round-trip. If the server call fails we
+   * revert; on success the next loadSessions() re-aligns with the truth.
+   */
+  const handleToggleFavorite = useCallback(async (sessionId: string, next: boolean) => {
+    const prev = favoriteSessionIds;
+    setFavoriteSessionIds((cur) => {
+      const updated = new Set(cur);
+      if (next) updated.add(sessionId);
+      else updated.delete(sessionId);
+      return updated;
+    });
+    try {
+      const res = await fetch("/api/sessions/favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, favorite: next }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+      setFavoriteSessionIds(prev);
+    }
+  }, [favoriteSessionIds]);
 
   const restoredRef = useRef(false);
 
@@ -755,11 +816,32 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         setWtNewBranch("");
         setWtError(null);
         setWtConfirmRemove(null);
+        setWtFilter("");
+      }
+      if (resetPhase === "confirming" && resetToolbarRef.current && !resetToolbarRef.current.contains(e.target as Node)) {
+        setResetPhase("idle");
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  }, [resetPhase]);
+
+  // Auto-revert the inline confirmation back to idle after 5s so the
+  // toolbar doesn't sit in a half-armed state if the user gets distracted.
+  useEffect(() => {
+    if (resetPhase !== "confirming") return;
+    const t = setTimeout(() => setResetPhase("idle"), 5000);
+    return () => clearTimeout(t);
+  }, [resetPhase]);
+
+  // When the action becomes unavailable (e.g. session switched, streaming
+  // started, reset just completed) cancel any pending confirmation so the
+  // toolbar doesn't lie about its state.
+  useEffect(() => {
+    if (!canResetContext && resetPhase === "confirming") {
+      setResetPhase("idle");
+    }
+  }, [canResetContext, resetPhase]);
 
   // Clicking a session moves the effective cwd to that session's worktree.
   // Done on the click path (not via the selectedCwd prop sync) so it also
@@ -792,31 +874,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
     : allSessions;
 
-  // Optimistic favorite toggle: flip local state immediately, revert on failure.
-  const handleToggleFavorite = useCallback(async (sessionId: string, next: boolean) => {
-    const prev = favoriteSessionIds;
-    setFavoriteSessionIds((cur) => {
-      const updated = new Set(cur);
-      if (next) updated.add(sessionId);
-      else updated.delete(sessionId);
-      return updated;
-    });
-    try {
-      const res = await fetch("/api/sessions/favorites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, favorite: next }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch {
-      setFavoriteSessionIds(prev);
-    }
-  }, [favoriteSessionIds]);
-
-  // Favorited sessions surfaced in a dedicated FAVORITES panel.
+  // Build parent-child tree within the filtered set.
+  // useMemo so we don't re-walk the parent chain on every unrelated render
+  // (e.g. explorer toggle, dropdown open/close, SSE running-id updates).
+  const sessionTree = useMemo(() => buildSessionTree(filteredSessions), [filteredSessions]);
+  // Running sessions — surfaced in a dedicated "RUNNING" panel regardless of
+  // the current project filter, so the user can always see and jump to agents
+  // that are still working in other worktrees.
+  const runningSessions = allSessions.filter((s) => runningSessionIds.has(s.id));
+  // Favorited sessions — surfaced in a dedicated "FAVORITES" panel regardless
+  // of the current project filter, so the user can jump to pinned sessions
+  // in any project without having to switch projects first. Only sessions
+  // that still exist are kept; dangling favorites (session file deleted out
+  // of band) are dropped silently and the API cleans them up on the next
+  // DELETE or read.
   const favoriteSessions = allSessions
     .filter((s) => favoriteSessionIds.has(s.id))
     .sort((a, b) => b.modified.localeCompare(a.modified));
+  // Quota-stuck sessions — agents that hit a billing/quota error and are
+  // waiting for the provider's interval to reset. The store is shared across
+  // providers, but we drop any session that's already in the running set
+  // (a race between the running SSE and the store update could otherwise
+  // render the same session twice).
+  const allSchedules = useAllAutoResumeSchedules();
+  const waitingSchedules = allSchedules.filter((s) => !runningSessionIds.has(s.sessionId));
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -845,9 +926,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
            title: t("sidebar.checkingWorktrees"),
         }
       : null);
-
-  // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1155,6 +1233,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           if (!worktreeState) return null;
           const currentWt = worktreeState.worktrees.find((w) => w.path === selectedCwd)
             ?? worktreeState.worktrees.find((w) => w.isMain);
+          const showWtFilter = worktreeState.worktrees.length >= 8;
+          const visibleWorktrees = showWtFilter && wtFilter.trim()
+            ? worktreeState.worktrees.filter((w) =>
+                (w.branch ?? displayCwd(w.path, homeDir)).toLowerCase().includes(wtFilter.trim().toLowerCase()))
+            : worktreeState.worktrees;
           return (
             <div ref={wtDropdownRef} style={{ position: "relative", marginTop: 6 }}>
               <button
@@ -1216,8 +1299,36 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   overflow: "hidden",
                 }}
               >
+                  {showWtFilter && (
+                    <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
+                      <input
+                        value={wtFilter}
+                        onChange={(e) => setWtFilter(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") {
+                            setWtFilter("");
+                            setWtDropdownOpen(false);
+                          }
+                        }}
+                        placeholder={t("sidebar.filterWorktrees")}
+                        autoFocus
+                        style={{
+                          width: "100%",
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                          padding: "5px 8px",
+                          border: "1px solid var(--border)",
+                          borderRadius: 5,
+                          outline: "none",
+                          background: "var(--bg)",
+                          color: "var(--text)",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                    </div>
+                  )}
                   <div style={{ maxHeight: "min(40vh, 300px)", overflowY: "auto" }}>
-                    {worktreeState.worktrees.map((wt) => {
+                    {visibleWorktrees.map((wt) => {
                       const isCurrent = wt.path === selectedCwd || (wt.isMain && !worktreeState.worktrees.some((w) => w.path === selectedCwd));
                       if (wtConfirmRemove === wt.path) {
                         return (
@@ -1252,6 +1363,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                               setSelectedCwd(wt.path);
                               setWtDropdownOpen(false);
                               setWtError(null);
+                              setWtFilter("");
                             }}
                             title={wt.path}
                             style={{
@@ -1307,6 +1419,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         </div>
                       );
                     })}
+                    {showWtFilter && visibleWorktrees.length === 0 && wtFilter.trim() && (
+                      <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-dim)" }}>{t("sidebar.noMatchingWorktrees")}</div>
+                    )}
                   </div>
 
                   {!wtNewOpen ? (
@@ -1462,8 +1577,262 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
+      {/* Session-level actions — only visible when a session is selected.
+          Reset context lives here (rather than in the per-session hover row)
+          so it's always reachable on both desktop and mobile, and so the
+          destructive action gets a stable, glanceable placement. The
+          destructive nature earns it a two-step inline confirm. */}
+      {selectedSessionId && onResetContext && (
+        <div
+          ref={resetToolbarRef}
+          style={{
+            padding: "6px 8px 4px 8px",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          {resetPhase === "idle" ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (!canResetContext) return;
+                setResetPhase("confirming");
+              }}
+              disabled={!canResetContext}
+              title={canResetContext ? "Reset context (navigates leaf to session start)" : "Reset unavailable"}
+              aria-label="Reset context"
+              aria-disabled={!canResetContext}
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                height: 30,
+                padding: "0 10px",
+                background: "var(--bg-hover)",
+                border: `1px solid ${canResetContext ? "var(--border)" : "transparent"}`,
+                borderRadius: 7,
+                color: canResetContext ? "var(--text-muted)" : "var(--text-dim)",
+                cursor: canResetContext ? "pointer" : "not-allowed",
+                fontSize: 12,
+                fontWeight: 500,
+                opacity: canResetContext ? 1 : 0.5,
+                transition: "background 0.12s, color 0.12s, border-color 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                if (!canResetContext) return;
+                e.currentTarget.style.background = "var(--bg-selected)";
+                e.currentTarget.style.color = "var(--text)";
+              }}
+              onMouseLeave={(e) => {
+                if (!canResetContext) return;
+                e.currentTarget.style.background = "var(--bg-hover)";
+                e.currentTarget.style.color = "var(--text-muted)";
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+              {!isMobile && <span>Reset context</span>}
+            </button>
+          ) : (
+            <div
+              role="group"
+              aria-label="Confirm reset context"
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                height: 30,
+                padding: "0 4px 0 10px",
+                background: "color-mix(in srgb, #ef4444 8%, var(--bg-panel))",
+                border: "1px solid color-mix(in srgb, #ef4444 40%, var(--border))",
+                borderRadius: 7,
+                color: "var(--text)",
+                fontSize: 12,
+                fontWeight: 500,
+              }}
+            >
+              <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Reset?</span>
+              <button
+                type="button"
+                aria-label="Confirm reset"
+                onClick={() => {
+                  setResetPhase("idle");
+                  onResetContext();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 26,
+                  height: 22,
+                  padding: 0,
+                  background: "rgba(239,68,68,0.18)",
+                  border: "1px solid rgba(239,68,68,0.45)",
+                  borderRadius: 5,
+                  color: "#fca5a5",
+                  cursor: "pointer",
+                  transition: "background 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.30)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.18)"; }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Cancel reset"
+                onClick={() => setResetPhase("idle")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 26,
+                  height: 22,
+                  padding: 0,
+                  background: "var(--bg-hover)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 5,
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  transition: "background 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-selected)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sidebar tabs */}
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 4px" }}>
+        <button
+          onClick={() => setSidebarTab("sessions")}
+          style={{
+            padding: "8px 10px",
+            color: sidebarTab === "sessions" ? "var(--accent)" : "var(--text-muted)",
+            background: "none",
+            border: "none",
+            borderBottom: "2px solid",
+            borderBottomColor: sidebarTab === "sessions" ? "var(--accent)" : "transparent",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 500,
+            transition: "color 0.15s, border-color 0.15s",
+          }}
+        >
+          会话 ({allSessions.length})
+        </button>
+        <button
+          onClick={() => setSidebarTab("favorites")}
+          style={{
+            padding: "8px 10px",
+            color: sidebarTab === "favorites" ? "var(--accent)" : "var(--text-muted)",
+            background: "none",
+            border: "none",
+            borderBottom: "2px solid",
+            borderBottomColor: sidebarTab === "favorites" ? "var(--accent)" : "transparent",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 500,
+            transition: "color 0.15s, border-color 0.15s",
+          }}
+        >
+          收藏 ({favoriteSessions.length})
+        </button>
+      </div>
+
+      {/* Favorites panel — shows favorited sessions from any project, so the
+          user can jump back to them regardless of the current project filter.
+          Only rendered when there are favorites (matching the RUNNING panel's
+          visibility logic), so the sidebar stays uncluttered by default. */}
+      {sidebarTab === "favorites" && favoriteSessions.length > 0 && (
+        <div
+          style={{
+            borderTop: "1px solid var(--border)",
+            display: "flex",
+            flexDirection: "column",
+            flex: favoritesPanelOpen ? "0 1 auto" : "0 0 auto",
+            maxHeight: favoritesPanelOpen ? "min(45%, 320px)" : undefined,
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+            <button
+              onClick={() => setFavoritesPanelOpen((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                flex: 1,
+                padding: "6px 10px",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                textAlign: "left",
+              }}
+            >
+              <svg
+                width="9" height="9" viewBox="0 0 10 10" fill="none"
+                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+                style={{ transform: favoritesPanelOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+              >
+                <polyline points="3 2 7 5 3 8" />
+              </svg>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" strokeWidth="1" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              Favorites
+              <span style={{ marginLeft: 2, opacity: 0.7, fontWeight: 500 }}>· {favoriteSessions.length}</span>
+            </button>
+          </div>
+          {favoritesPanelOpen && (
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+              {favoriteSessions.map((s) => (
+                <SessionItem
+                  key={s.id}
+                  session={s}
+                  isSelected={s.id === selectedSessionId}
+                  isRunning={runningSessionIds.has(s.id)}
+                  isUnread={false}
+                  isFavorite
+                  onClick={() => handleSelectSessionFromList(s)}
+                  onRenamed={loadSessions}
+                  onDeleted={(id) => {
+                    onSessionDeleted?.(id);
+                    loadSessions();
+                  }}
+                  onToggleFavorite={handleToggleFavorite}
+                  depth={0}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Session list */}
-      <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+      {sidebarTab === "sessions" && (
+      <div style={{ flex: (explorerOpen && (selectedCwdProp || selectedCwd)) || (runningPanelOpen && (runningSessions.length > 0 || waitingSchedules.length > 0)) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.loading")}
@@ -1539,17 +1908,108 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             runningSessionIds={runningSessionIds}
             unreadSessionIds={unreadSessionIds}
             favoriteSessionIds={favoriteSessionIds}
-            onToggleFavorite={handleToggleFavorite}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
             onSessionDeleted={(id) => {
               onSessionDeleted?.(id);
               loadSessions();
             }}
+            onToggleFavorite={handleToggleFavorite}
             depth={0}
           />
         ))}
       </div>
+      )}
+
+      {/* Running sessions section — only rendered when there's at least one
+          session currently working OR waiting for a quota reset, so the panel
+          disappears on its own once the last agent finishes/cancels. */}
+      {(runningSessions.length > 0 || waitingSchedules.length > 0) && (
+        <div
+          style={{
+            borderTop: "1px solid var(--border)",
+            display: "flex",
+            flexDirection: "column",
+            flex: runningPanelOpen ? "1 1 0" : "0 0 auto",
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+            <button
+              onClick={() => setRunningPanelOpen((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                flex: 1,
+                padding: "6px 10px",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                textAlign: "left",
+              }}
+            >
+              <svg
+                width="9" height="9" viewBox="0 0 10 10" fill="none"
+                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+                style={{ transform: runningPanelOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+              >
+                <polyline points="3 2 7 5 3 8" />
+              </svg>
+              Running
+              <span style={{ marginLeft: 2, opacity: 0.7, fontWeight: 500 }}>
+                · {runningSessions.length}
+                {waitingSchedules.length > 0 && (
+                  <span style={{ color: "#d97706" }}> + {waitingSchedules.length} waiting</span>
+                )}
+              </span>
+            </button>
+          </div>
+          {runningPanelOpen && (
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+              {runningSessions.map((s) => (
+                <SessionItem
+                  key={s.id}
+                  session={s}
+                  isSelected={s.id === selectedSessionId}
+                  isRunning
+                  isUnread={false}
+                  isFavorite={favoriteSessionIds.has(s.id)}
+                  onClick={() => handleSelectSessionFromList(s)}
+                  onRenamed={loadSessions}
+                  onDeleted={(id) => {
+                    onSessionDeleted?.(id);
+                    loadSessions();
+                  }}
+                  onToggleFavorite={handleToggleFavorite}
+                  depth={0}
+                />
+              ))}
+              {waitingSchedules.map((sched) => {
+                const session = allSessions.find((a) => a.id === sched.sessionId);
+                return (
+                  <WaitingSessionItem
+                    key={sched.sessionId}
+                    session={session}
+                    schedule={sched}
+                    isSelected={sched.sessionId === selectedSessionId}
+                    onClick={() => {
+                      if (session) handleSelectSessionFromList(session);
+                    }}
+                    onCancel={() => autoResumeStore.cancel(sched.sessionId)}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
@@ -1619,21 +2079,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   <path d="m17 8-5-5-5 5" />
                   <path d="M12 3v12" />
                 </svg>
-              </ToolbarIconButton>
+</ToolbarIconButton>
             )}
-            <ToolbarIconButton
-              onClick={() => {
-                if (onExplorerRefresh) onExplorerRefresh();
-                else setExplorerKey((k) => k + 1);
-                setExplorerRefreshDone(true);
-                if (explorerRefreshTimerRef.current) clearTimeout(explorerRefreshTimerRef.current);
-                explorerRefreshTimerRef.current = setTimeout(() => setExplorerRefreshDone(false), 2000);
+            <span className="pi-tooltip" data-tooltip="Refresh explorer">
+              <button
+                onClick={() => {
+                  if (onExplorerRefresh) onExplorerRefresh();
+                  else setExplorerKey((k) => k + 1);
+                  setExplorerRefreshDone(true);
+                  if (explorerRefreshTimerRef.current) clearTimeout(explorerRefreshTimerRef.current);
+                  explorerRefreshTimerRef.current = setTimeout(() => setExplorerRefreshDone(false), 2000);
+                }}
+                aria-label="Refresh explorer"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 26, height: 26, padding: 0, marginRight: 6,
+                background: explorerRefreshDone ? "rgba(74,222,128,0.18)" : "none",
+                border: "none",
+                color: explorerRefreshDone ? "#4ade80" : "var(--text-dim)",
+                cursor: "pointer",
+                borderRadius: 5,
+                flexShrink: 0,
+                transition: "color 0.3s, background 0.3s",
               }}
-              title={t("sidebar.refreshExplorer")}
-              skipHover={explorerRefreshDone}
-              color={explorerRefreshDone ? "#4ade80" : "var(--text-dim)"}
-              background={explorerRefreshDone ? "rgba(74,222,128,0.18)" : "none"}
-              marginRight={6}
+              onMouseEnter={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
             >
               {explorerRefreshDone ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1645,7 +2115,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   <path d="M3 3v5h5" />
                 </svg>
               )}
-            </ToolbarIconButton>
+</button>
+            </span>
           </div>
           {explorerOpen && (
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
@@ -1664,6 +2135,97 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           )}
         </div>
       )}
+
+      {/* Bottom toolbar — theme toggle + keyboard shortcuts hint live here so
+          the top bar isn't clogged up. Help pushes left, theme sits right. */}
+      <div
+        style={{
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 4,
+          padding: "6px 10px",
+          borderTop: "1px solid var(--border)",
+          background: "var(--bg-panel)",
+        }}
+      >
+        <span className="pi-tooltip" data-tooltip="Keyboard shortcuts (?)">
+          <button
+            type="button"
+            onClick={() => toggleShortcutsPanel()}
+            aria-label="Keyboard shortcuts"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 28, height: 28, padding: 0,
+              background: "none",
+              border: "1px solid transparent",
+              borderRadius: 6,
+              color: "var(--text-muted)", cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              fontWeight: 600,
+              transition: "background 0.12s, color 0.12s, border-color 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-hover)";
+              e.currentTarget.style.color = "var(--text)";
+              e.currentTarget.style.borderColor = "var(--border)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "none";
+              e.currentTarget.style.color = "var(--text-muted)";
+              e.currentTarget.style.borderColor = "transparent";
+            }}
+          >
+            ?
+          </button>
+        </span>
+        <span className="pi-tooltip" data-tooltip={isDark ? "Switch to light mode" : "Switch to dark mode"}>
+          <button
+            type="button"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+            }}
+            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            aria-pressed={isDark}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 28, height: 28, padding: 0,
+              background: "none",
+              border: "1px solid transparent",
+              borderRadius: 6,
+              color: "var(--text-muted)", cursor: "pointer",
+              transition: "background 0.12s, color 0.12s, border-color 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-hover)";
+              e.currentTarget.style.color = "var(--text)";
+              e.currentTarget.style.borderColor = "var(--border)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "none";
+              e.currentTarget.style.color = "var(--text-muted)";
+              e.currentTarget.style.borderColor = "transparent";
+            }}
+          >
+            {isDark ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="4.5" />
+                <line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" />
+                <line x1="4.93" y1="4.93" x2="6.34" y2="6.34" /><line x1="17.66" y1="17.66" x2="19.07" y2="19.07" />
+                <line x1="2" y1="12" x2="4" y2="12" /><line x1="20" y1="12" x2="22" y2="12" />
+                <line x1="4.93" y1="19.07" x2="6.34" y2="17.66" /><line x1="17.66" y1="6.34" x2="19.07" y2="4.93" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
+          </button>
+        </span>
+      </div>
     </div>
   );
 }
@@ -1688,7 +2250,7 @@ function SessionTreeItem({
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
-  onToggleFavorite: (sessionId: string, next: boolean) => void;
+  onToggleFavorite?: (id: string, next: boolean) => void;
   depth: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -1714,10 +2276,10 @@ function SessionTreeItem({
           isRunning={runningSessionIds.has(node.session.id)}
           isUnread={unreadSessionIds.has(node.session.id)}
           isFavorite={favoriteSessionIds.has(node.session.id)}
-          onToggleFavorite={onToggleFavorite}
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
           onDeleted={(id) => onSessionDeleted?.(id)}
+          onToggleFavorite={onToggleFavorite}
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
@@ -1785,6 +2347,28 @@ function RunningSessionIndicator() {
   );
 }
 
+function FavoriteIndicator() {
+  return (
+    <span
+      title="Favorited"
+      aria-label="Favorited session"
+      style={{
+        width: 14,
+        height: 14,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "#f59e0b",
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "block" }}>
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      </svg>
+    </span>
+  );
+}
+
 function UnreadSessionIndicator() {
   const { t } = useI18n();
   return (
@@ -1812,11 +2396,11 @@ function UnreadSessionIndicator() {
   );
 }
 
-function FavoriteIndicator() {
+function WaitingSessionIndicator() {
   return (
     <span
-      title="Favorited"
-      aria-label="Favorited session"
+      title="Waiting for token quota to reset…"
+      aria-label="Waiting for quota reset"
       style={{
         width: 14,
         height: 14,
@@ -1824,13 +2408,126 @@ function FavoriteIndicator() {
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
-        color: "#f59e0b",
+        color: "#d97706",
       }}
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "block" }}>
-        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
+        <circle cx="12" cy="12" r="9" />
+        <polyline points="12 7 12 12 15 14" />
       </svg>
     </span>
+  );
+}
+
+function formatRemainingMs(ms: number): string {
+  if (ms <= 0) return "any moment";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function WaitingSessionItem({
+  session,
+  schedule,
+  isSelected,
+  onClick,
+  onCancel,
+}: {
+  session: SessionInfo | undefined;
+  schedule: AutoResumeSchedule;
+  isSelected: boolean;
+  onClick: () => void;
+  onCancel: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const remainMs = Math.max(0, schedule.wakesAt - now);
+  const title = session?.name
+    || schedule.lastPrompt.split("\n")[0].slice(0, 50)
+    || schedule.sessionId.slice(0, 12);
+  const subtitle = session
+    ? `auto-resume in ${formatRemainingMs(remainMs)}`
+    : `auto-resume in ${formatRemainingMs(remainMs)} · ${schedule.lastPrompt.split("\n")[0].slice(0, 40)}`;
+
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      title={schedule.lastPrompt}
+      style={{
+        height: 54,
+        display: "flex",
+        alignItems: "center",
+        padding: "0 8px 0 14px",
+        cursor: "pointer",
+        background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+        borderLeft: isSelected ? "2px solid var(--accent)" : "2px solid transparent",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+        <WaitingSessionIndicator />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{
+            fontSize: 13,
+            color: "var(--text)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            lineHeight: 1.25,
+          }}>
+            {title}
+          </div>
+          <div style={{
+            fontSize: 11,
+            color: "#d97706",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            lineHeight: 1.3,
+            marginTop: 2,
+          }}>
+            {subtitle}
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onCancel();
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
+        title="Cancel auto-resume"
+        aria-label="Cancel auto-resume"
+        style={{
+          background: "transparent",
+          border: "none",
+          color: hovered ? "var(--text-dim)" : "transparent",
+          cursor: "pointer",
+          padding: 4,
+          marginLeft: 4,
+          fontSize: 16,
+          lineHeight: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          borderRadius: 4,
+        }}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -1857,7 +2554,7 @@ function SessionItem({
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
-  onToggleFavorite?: (sessionId: string, next: boolean) => void;
+  onToggleFavorite?: (id: string, next: boolean) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -1957,11 +2654,20 @@ function SessionItem({
         /* ── Delete confirmation: same height, two flat buttons ── */
         <>
           <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })}
-            {isFavorite && (
-              <div style={{ color: "#f59e0b", fontSize: 11, fontWeight: 500, marginTop: 1 }}>
-                ★ Favorited. Will unpin from sidebar.
-              </div>
+{isFavorite ? (
+              <>
+                <span style={{ color: "#f59e0b", fontWeight: 600 }}>★ {t("sidebar.favorited")}.</span>{" "}
+                {t("sidebar.stillDelete")} <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 18)}{title.length > 18 ? "…" : ""}&rdquo;</span>?
+              </>
+            ) : (
+              <>
+                {t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })}
+                {isFavorite && (
+                  <div style={{ color: "#f59e0b", fontSize: 11, fontWeight: 500, marginTop: 1 }}>
+                    ★ Favorited. Will unpin from sidebar.
+                  </div>
+                )}
+              </>
             )}
           </div>
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
@@ -1982,7 +2688,7 @@ function SessionItem({
                 <path d="M10 11v6M14 11v6" />
                 <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
               </svg>
-              {t("sidebar.delete")}
+{isFavorite ? "Delete anyway" : t("sidebar.delete")}
             </button>
             <button
               onClick={handleDeleteCancel}
@@ -2047,8 +2753,18 @@ function SessionItem({
                 lineHeight: 1.4,
                 color: "var(--text)",
               }}
-              title={title}
+title={
+                isFavorite
+                  ? `${title} · ★ Favorited`
+                  : isRunning
+                    ? `${title} · Agent running…`
+                    : isUnread
+                      ? `${title} · New activity`
+                      : title
+              }
             >
+              {isFavorite && <FavoriteIndicator />}
+              {isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
@@ -2103,6 +2819,38 @@ function SessionItem({
           {/* Action buttons — shown on hover */}
           {hovered && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite?.(session.id, !isFavorite);
+                }}
+                title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                aria-pressed={isFavorite}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 32, height: 32, padding: 0,
+                  background: isFavorite ? "rgba(245,158,11,0.10)" : "var(--bg-hover)",
+                  border: `1px solid ${isFavorite ? "rgba(245,158,11,0.35)" : "var(--border)"}`,
+                  borderRadius: 7, color: isFavorite ? "#f59e0b" : "var(--text-muted)",
+                  cursor: "pointer", flexShrink: 0,
+                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = isFavorite ? "rgba(245,158,11,0.18)" : "var(--bg-selected)";
+                  e.currentTarget.style.color = "#f59e0b";
+                  e.currentTarget.style.borderColor = "rgba(245,158,11,0.55)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = isFavorite ? "rgba(245,158,11,0.10)" : "var(--bg-hover)";
+                  e.currentTarget.style.color = isFavorite ? "#f59e0b" : "var(--text-muted)";
+                  e.currentTarget.style.borderColor = isFavorite ? "rgba(245,158,11,0.35)" : "var(--border)";
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill={isFavorite ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+              </button>
               <button
                 onClick={startRename}
                 title={t("sidebar.rename")}

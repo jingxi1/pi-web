@@ -13,9 +13,13 @@ import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { OpenClawIntegration } from "./openclaw-integration";
 import { BranchNavigator } from "./BranchNavigator";
+import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
+import { autoResumeStore } from "@/lib/auto-resume-store";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useSwipeDismiss } from "@/hooks/useSwipeDismiss";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
@@ -42,6 +46,7 @@ export function AppShell() {
   const { isDark, toggleTheme } = useTheme();
   const { locale, setLocale, t: translate, supportedLocales } = useI18n();
   const isMobile = useIsMobile();
+  const breakpoint = useBreakpoint();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
@@ -62,14 +67,25 @@ export function AppShell() {
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
-  // On mobile the sidebar is an overlay drawer; hide it by default so the chat
-  // is visible on load. Runs once the breakpoint resolves after hydration.
+  // On mobile and tablet the sidebar is an overlay drawer; hide it by default
+  // so the chat is visible on load. Runs once the breakpoint resolves after hydration.
   useEffect(() => {
-    if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+    if (breakpoint !== "desktop") setSidebarOpen(false);
+  }, [breakpoint]);
+  useEffect(() => {
+    autoResumeStore.hydrate();
+  }, []);
   useEffect(() => {
     setMobileSidebarReady(true);
   }, []);
+
+  // Swipe-left on the open sidebar to dismiss it (mobile/tablet drawer).
+  const sidebarSwipe = useSwipeDismiss({
+    onDismiss: () => setSidebarOpen(false),
+    axis: "x",
+    threshold: 80,
+    velocityThreshold: 0.4,
+  });
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
   const languageBtnRef = useRef<HTMLButtonElement>(null);
@@ -126,6 +142,12 @@ export function AppShell() {
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const handleContextUsageChange = useCallback((usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => {
     setContextUsage(usage);
+  }, []);
+
+  // Currently selected model's provider id — populated by ChatWindow, drives MinimaxTokenPlanBar visibility
+  const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
+  const handleSelectedModelChange = useCallback((_modelId: string, providerId: string) => {
+    setCurrentProviderId(providerId || null);
   }, []);
 
   // Single active panel — only one dropdown open at a time
@@ -401,6 +423,7 @@ export function AppShell() {
   }, []);
 
   const handleSessionDeleted = useCallback((sessionId: string) => {
+    autoResumeStore.cancel(sessionId);
     setRefreshKey((k) => k + 1);
     if (selectedSession?.id === sessionId) {
       const cwd = selectedSession.cwd;
@@ -611,7 +634,7 @@ export function AppShell() {
             disabled={disabled}
             title={label}
             style={{
-              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
               height: 32, padding: 0, background: "none", border: "none",
               borderRadius: 9, color: "var(--text-muted)", cursor: disabled ? "default" : "pointer",
               fontSize: 12, opacity: disabled ? 0.35 : 1,
@@ -621,7 +644,6 @@ export function AppShell() {
             onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
           >
             {icon}
-            {label}
           </button>
         ))}
         <div id="openclaw-toolbar-slot" style={{ display: "flex", gap: 5, alignItems: "center" }} />
@@ -702,7 +724,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
+    <div style={{ display: "flex", height: "100%", overflow: "hidden", background: "var(--bg)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -721,6 +743,9 @@ export function AppShell() {
       {/* Left sidebar */}
       <div
         className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
+        onTouchStart={sidebarSwipe.onTouchStart}
+        onTouchMove={sidebarSwipe.onTouchMove}
+        onTouchEnd={sidebarSwipe.onTouchEnd}
         style={{
           background: "var(--bg-panel)",
           borderRight: "1px solid var(--border)",
@@ -1043,6 +1068,8 @@ export function AppShell() {
               </button>
             </div>
           )}
+          {/* Token-plan quota — only when current model belongs to a tracked provider */}
+          <MinimaxTokenPlanBar enabled={currentProviderId === "minimax-cn"} />
           {/* Session stats — right-aligned in top bar */}
           {showChat && (sessionStats || contextUsage) && (() => {
              const tokens = sessionStats?.tokens;
@@ -1401,6 +1428,7 @@ export function AppShell() {
               onSessionStatsChange={handleSessionStatsChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onContextUsageChange={handleContextUsageChange}
+              onSelectedModelChange={handleSelectedModelChange}
               onOpenFile={handleOpenLinkedFile}
             />
           ) : initialCwdStatus === "validating" ? (
@@ -1500,7 +1528,7 @@ export function AppShell() {
        title={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
        aria-label={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
       style={{
-        position: "fixed", top: 0, right: 0, zIndex: 300,
+        position: "fixed", top: "env(safe-area-inset-top, 0px)", right: "env(safe-area-inset-right, 0px)", zIndex: 300,
         display: "flex", alignItems: "center", justifyContent: "center",
         width: 36, height: 36, padding: 0,
         background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
