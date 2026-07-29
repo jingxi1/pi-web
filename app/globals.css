@@ -26,7 +26,7 @@
   --border: #e0e0e0;
   --text: #1a1a1a;
   --text-muted: #6b7280;
-  --text-dim: #9ca3af;
+  --text-dim: #8a93a0;
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
   --user-bg: #eff6ff;
@@ -37,19 +37,19 @@
 
 html.dark {
   --bg: #1a1a1a;
-  --bg-panel: #242424;
-  --bg-hover: #2e2e2e;
+  --bg-panel: #232323;
+  --bg-hover: #2c2c2c;
   --bg-selected: #383838;
   --border: #3a3a3a;
-  --text: #e8e8e8;
-  --text-muted: #9ca3af;
-  --text-dim: #6b7280;
-  --accent: #60a5fa;
-  --accent-hover: #93c5fd;
+  --text: #ededed;
+  --text-muted: #a8b0bd;
+  --text-dim: #8b93a1;
+  --accent: #7eb6ff;
+  --accent-hover: #a3c8ff;
   --user-bg: #1e293b;
   --assistant-bg: #1a1a1a;
-  --tool-bg: #1f2937;
-  --bg-subtle: rgba(255,255,255,0.04);
+  --tool-bg: #202836;
+  --bg-subtle: rgba(255,255,255,0.05);
 }
 
 /* Theme toggle: circular wipe via View Transitions API.
@@ -363,7 +363,16 @@ pre, code {
   border-radius: 7px;
   overflow: hidden;
   background: var(--bg);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 42%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 42%, transparent),
+              0 0 0 0.5px color-mix(in srgb, var(--border) 35%, transparent);
+  transition: box-shadow 0.18s ease;
+}
+html.dark .markdown-code-block {
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4),
+              0 0 0 0.5px rgba(255, 255, 255, 0.04);
+}
+.markdown-code-block:hover {
+  border-color: color-mix(in srgb, var(--border) 65%, var(--text-muted));
 }
 .markdown-code-header {
   padding: 5px 10px;
@@ -396,6 +405,7 @@ pre, code {
   font: inherit;
   font-size: 11px;
   line-height: 1.25;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
 }
 .markdown-code-action:hover:not(:disabled) {
   color: var(--text);
@@ -409,6 +419,17 @@ pre, code {
 .markdown-code-action.is-active {
   background: var(--bg-selected);
   color: var(--text);
+}
+.markdown-code-action.is-copied {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #10b981;
+  animation: code-copy-pulse 0.42s ease-out;
+}
+@keyframes code-copy-pulse {
+  0%   { transform: scale(1);   box-shadow: 0 0 0 0   rgba(16, 185, 129, 0.55); }
+  35%  { transform: scale(1.08); box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.18); }
+  100% { transform: scale(1);   box-shadow: 0 0 0 0   rgba(16, 185, 129, 0); }
 }
 
 .mermaid-block {
@@ -771,6 +792,119 @@ span.linenumber {
 @keyframes drop-ripple {
   0%   { transform: scale(0); opacity: 0.6; }
   100% { transform: scale(1); opacity: 0; }
+}
+
+/* Skeleton shimmer for loading state */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position: calc(100% + 200px) 0; }
+}
+.skeleton-line {
+  background: linear-gradient(
+    90deg,
+    var(--bg-panel) 0%,
+    var(--bg-hover) 40%,
+    var(--bg-panel) 80%
+  );
+  background-size: 200px 100%;
+  background-repeat: no-repeat;
+  border-radius: 4px;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-line + .skeleton-line { margin-top: 8px; }
+
+/* Quick-start cards (empty state guidance) */
+@keyframes quick-start-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.quick-start-card {
+  opacity: 0;
+  animation: quick-start-in 0.32s ease-out forwards;
+}
+
+/* Scroll-to-bottom FAB */
+@keyframes scroll-fab-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.92); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+@keyframes scroll-fab-out {
+  from { opacity: 1; transform: translateY(0)    scale(1); }
+  to   { opacity: 0; transform: translateY(8px)  scale(0.92); }
+}
+.scroll-fab-enter { animation: scroll-fab-in 0.18s ease-out forwards; }
+.scroll-fab-exit  { animation: scroll-fab-out 0.16s ease-in  forwards; }
+
+/* Tool call expand/collapse via grid-template-rows */
+.tool-call-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s cubic-bezier(0.32, 0.72, 0.18, 1),
+              opacity 0.18s ease;
+  opacity: 0;
+}
+.tool-call-body.is-expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.tool-call-body > .tool-call-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Tooltip wrapper for sidebar icon buttons */
+.pi-tooltip {
+  position: relative;
+  display: inline-flex;
+}
+.pi-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease 0.05s, transform 0.18s ease 0.05s;
+  z-index: 1000;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+.pi-tooltip:hover::after,
+.pi-tooltip:focus-within::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Spin icon used in skeleton-load indicator */
+.spin-loop {
+  animation: spin 0.9s linear infinite;
+}
+
+/* Toast in/out (used by components/Toast.tsx) */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(16px) scale(0.96); }
+  to   { opacity: 1; transform: translateX(0)    scale(1); }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0)    scale(1); }
+  to   { opacity: 0; transform: translateX(16px) scale(0.96); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast-host-anim { animation: none !important; }
+}
+
+/* Shortcuts panel backdrop fade-in */
+@keyframes shortcuts-panel-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 @keyframes blink {
