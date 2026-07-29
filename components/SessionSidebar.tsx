@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { useTheme } from "@/hooks/useTheme";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { toggleShortcutsPanel } from "./ShortcutsPanel";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { autoResumeStore, useAllAutoResumeSchedules, type Stored as AutoResumeSchedule } from "@/lib/auto-resume-store";
 
@@ -90,6 +93,11 @@ interface Props {
   onExplorerRefresh?: () => void;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
   onAtMentions?: (relativePaths: string[]) => void;
+  /** Reset the current session's context in-place (navigate_tree to root). */
+  onResetContext?: () => void;
+  /** Whether the reset action is currently allowed (no session / streaming
+   *  / already at root all turn this off). */
+  canResetContext?: boolean;
 }
 
 interface WorktreeEntry {
@@ -263,16 +271,30 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
     if (s.parentSessionId) parentOf.set(s.id, s.parentSessionId);
   }
 
-  // Walk up the parentSessionId chain to find the nearest ancestor that exists in byId
+  // Memoized ancestor lookup. Each session is walked up the parent chain at
+  // most once across the entire build — the cached "ultimate root" is reused
+  // for every sibling in the same lineage, turning the previous O(n²) worst
+  // case (long fork chains where every node re-walks the whole stack) into
+  // a near-linear O(n) build.
+  const ancestorCache = new Map<string, string | null>();
   function resolveAncestor(id: string): string | null {
-    let cur = parentOf.get(id);
+    const cached = ancestorCache.get(id);
+    if (cached !== undefined) return cached;
+    let cur: string | undefined = parentOf.get(id);
     const visited = new Set<string>();
     while (cur) {
-      if (visited.has(cur)) return null; // cycle guard
+      if (visited.has(cur)) {
+        ancestorCache.set(id, null);
+        return null; // cycle guard
+      }
       visited.add(cur);
-      if (byId.has(cur)) return cur;
+      if (byId.has(cur)) {
+        ancestorCache.set(id, cur);
+        return cur;
+      }
       cur = parentOf.get(cur);
     }
+    ancestorCache.set(id, null);
     return null;
   }
 
@@ -383,8 +405,10 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onResetContext, canResetContext }: Props) {
   const { t } = useI18n();
+  const { isDark, toggleTheme } = useTheme();
+  const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -398,6 +422,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [customPathError, setCustomPathError] = useState<string | null>(null);
   const [customPathValidating, setCustomPathValidating] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Reset-context toolbar state — when set to "confirming", the toolbar morphs
+  // into a confirm/cancel pair so the destructive action needs two taps.
+  // Reverts on outside click or after 5s of inactivity.
+  const [resetPhase, setResetPhase] = useState<"idle" | "confirming">("idle");
+  const resetToolbarRef = useRef<HTMLDivElement>(null);
   // Worktree switcher state
   const [worktreeState, setWorktreeState] = useState<WorktreeState | null>(null);
   const [wtDropdownOpen, setWtDropdownOpen] = useState(false);
@@ -789,10 +818,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         setWtConfirmRemove(null);
         setWtFilter("");
       }
+      if (resetPhase === "confirming" && resetToolbarRef.current && !resetToolbarRef.current.contains(e.target as Node)) {
+        setResetPhase("idle");
+      }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  }, [resetPhase]);
+
+  // Auto-revert the inline confirmation back to idle after 5s so the
+  // toolbar doesn't sit in a half-armed state if the user gets distracted.
+  useEffect(() => {
+    if (resetPhase !== "confirming") return;
+    const t = setTimeout(() => setResetPhase("idle"), 5000);
+    return () => clearTimeout(t);
+  }, [resetPhase]);
+
+  // When the action becomes unavailable (e.g. session switched, streaming
+  // started, reset just completed) cancel any pending confirmation so the
+  // toolbar doesn't lie about its state.
+  useEffect(() => {
+    if (!canResetContext && resetPhase === "confirming") {
+      setResetPhase("idle");
+    }
+  }, [canResetContext, resetPhase]);
 
   // Clicking a session moves the effective cwd to that session's worktree.
   // Done on the click path (not via the selectedCwd prop sync) so it also
@@ -824,6 +873,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const filteredSessions = selectedProject
     ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
     : allSessions;
+
+  // Build parent-child tree within the filtered set.
+  // useMemo so we don't re-walk the parent chain on every unrelated render
+  // (e.g. explorer toggle, dropdown open/close, SSE running-id updates).
+  const sessionTree = useMemo(() => buildSessionTree(filteredSessions), [filteredSessions]);
   // Running sessions — surfaced in a dedicated "RUNNING" panel regardless of
   // the current project filter, so the user can always see and jump to agents
   // that are still working in other worktrees.
@@ -898,9 +952,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
            title: t("sidebar.checkingWorktrees"),
         }
       : null);
-
-  // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1552,6 +1603,146 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
+      {/* Session-level actions — only visible when a session is selected.
+          Reset context lives here (rather than in the per-session hover row)
+          so it's always reachable on both desktop and mobile, and so the
+          destructive action gets a stable, glanceable placement. The
+          destructive nature earns it a two-step inline confirm. */}
+      {selectedSessionId && onResetContext && (
+        <div
+          ref={resetToolbarRef}
+          style={{
+            padding: "6px 8px 4px 8px",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          {resetPhase === "idle" ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (!canResetContext) return;
+                setResetPhase("confirming");
+              }}
+              disabled={!canResetContext}
+              title={canResetContext ? "Reset context (navigates leaf to session start)" : "Reset unavailable"}
+              aria-label="Reset context"
+              aria-disabled={!canResetContext}
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                height: 30,
+                padding: "0 10px",
+                background: "var(--bg-hover)",
+                border: `1px solid ${canResetContext ? "var(--border)" : "transparent"}`,
+                borderRadius: 7,
+                color: canResetContext ? "var(--text-muted)" : "var(--text-dim)",
+                cursor: canResetContext ? "pointer" : "not-allowed",
+                fontSize: 12,
+                fontWeight: 500,
+                opacity: canResetContext ? 1 : 0.5,
+                transition: "background 0.12s, color 0.12s, border-color 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                if (!canResetContext) return;
+                e.currentTarget.style.background = "var(--bg-selected)";
+                e.currentTarget.style.color = "var(--text)";
+              }}
+              onMouseLeave={(e) => {
+                if (!canResetContext) return;
+                e.currentTarget.style.background = "var(--bg-hover)";
+                e.currentTarget.style.color = "var(--text-muted)";
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+              {!isMobile && <span>Reset context</span>}
+            </button>
+          ) : (
+            <div
+              role="group"
+              aria-label="Confirm reset context"
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                height: 30,
+                padding: "0 4px 0 10px",
+                background: "color-mix(in srgb, #ef4444 8%, var(--bg-panel))",
+                border: "1px solid color-mix(in srgb, #ef4444 40%, var(--border))",
+                borderRadius: 7,
+                color: "var(--text)",
+                fontSize: 12,
+                fontWeight: 500,
+              }}
+            >
+              <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Reset?</span>
+              <button
+                type="button"
+                aria-label="Confirm reset"
+                onClick={() => {
+                  setResetPhase("idle");
+                  onResetContext();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 26,
+                  height: 22,
+                  padding: 0,
+                  background: "rgba(239,68,68,0.18)",
+                  border: "1px solid rgba(239,68,68,0.45)",
+                  borderRadius: 5,
+                  color: "#fca5a5",
+                  cursor: "pointer",
+                  transition: "background 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.30)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.18)"; }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Cancel reset"
+                onClick={() => setResetPhase("idle")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 26,
+                  height: 22,
+                  padding: 0,
+                  background: "var(--bg-hover)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 5,
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  transition: "background 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-selected)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Sidebar tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 4px" }}>
         <button
@@ -1915,21 +2106,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   <path d="m17 8-5-5-5 5" />
                   <path d="M12 3v12" />
                 </svg>
-              </ToolbarIconButton>
+</ToolbarIconButton>
             )}
-            <ToolbarIconButton
-              onClick={() => {
-                if (onExplorerRefresh) onExplorerRefresh();
-                else setExplorerKey((k) => k + 1);
-                setExplorerRefreshDone(true);
-                if (explorerRefreshTimerRef.current) clearTimeout(explorerRefreshTimerRef.current);
-                explorerRefreshTimerRef.current = setTimeout(() => setExplorerRefreshDone(false), 2000);
+            <span className="pi-tooltip" data-tooltip="Refresh explorer">
+              <button
+                onClick={() => {
+                  if (onExplorerRefresh) onExplorerRefresh();
+                  else setExplorerKey((k) => k + 1);
+                  setExplorerRefreshDone(true);
+                  if (explorerRefreshTimerRef.current) clearTimeout(explorerRefreshTimerRef.current);
+                  explorerRefreshTimerRef.current = setTimeout(() => setExplorerRefreshDone(false), 2000);
+                }}
+                aria-label="Refresh explorer"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 26, height: 26, padding: 0, marginRight: 6,
+                background: explorerRefreshDone ? "rgba(74,222,128,0.18)" : "none",
+                border: "none",
+                color: explorerRefreshDone ? "#4ade80" : "var(--text-dim)",
+                cursor: "pointer",
+                borderRadius: 5,
+                flexShrink: 0,
+                transition: "color 0.3s, background 0.3s",
               }}
-              title={t("sidebar.refreshExplorer")}
-              skipHover={explorerRefreshDone}
-              color={explorerRefreshDone ? "#4ade80" : "var(--text-dim)"}
-              background={explorerRefreshDone ? "rgba(74,222,128,0.18)" : "none"}
-              marginRight={6}
+              onMouseEnter={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
             >
               {explorerRefreshDone ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1941,7 +2142,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   <path d="M3 3v5h5" />
                 </svg>
               )}
-            </ToolbarIconButton>
+</button>
+            </span>
           </div>
           {explorerOpen && (
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
@@ -1960,6 +2162,97 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           )}
         </div>
       )}
+
+      {/* Bottom toolbar — theme toggle + keyboard shortcuts hint live here so
+          the top bar isn't clogged up. Help pushes left, theme sits right. */}
+      <div
+        style={{
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 4,
+          padding: "6px 10px",
+          borderTop: "1px solid var(--border)",
+          background: "var(--bg-panel)",
+        }}
+      >
+        <span className="pi-tooltip" data-tooltip="Keyboard shortcuts (?)">
+          <button
+            type="button"
+            onClick={() => toggleShortcutsPanel()}
+            aria-label="Keyboard shortcuts"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 28, height: 28, padding: 0,
+              background: "none",
+              border: "1px solid transparent",
+              borderRadius: 6,
+              color: "var(--text-muted)", cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              fontWeight: 600,
+              transition: "background 0.12s, color 0.12s, border-color 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-hover)";
+              e.currentTarget.style.color = "var(--text)";
+              e.currentTarget.style.borderColor = "var(--border)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "none";
+              e.currentTarget.style.color = "var(--text-muted)";
+              e.currentTarget.style.borderColor = "transparent";
+            }}
+          >
+            ?
+          </button>
+        </span>
+        <span className="pi-tooltip" data-tooltip={isDark ? "Switch to light mode" : "Switch to dark mode"}>
+          <button
+            type="button"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+            }}
+            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            aria-pressed={isDark}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 28, height: 28, padding: 0,
+              background: "none",
+              border: "1px solid transparent",
+              borderRadius: 6,
+              color: "var(--text-muted)", cursor: "pointer",
+              transition: "background 0.12s, color 0.12s, border-color 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-hover)";
+              e.currentTarget.style.color = "var(--text)";
+              e.currentTarget.style.borderColor = "var(--border)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "none";
+              e.currentTarget.style.color = "var(--text-muted)";
+              e.currentTarget.style.borderColor = "transparent";
+            }}
+          >
+            {isDark ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="4.5" />
+                <line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" />
+                <line x1="4.93" y1="4.93" x2="6.34" y2="6.34" /><line x1="17.66" y1="17.66" x2="19.07" y2="19.07" />
+                <line x1="2" y1="12" x2="4" y2="12" /><line x1="20" y1="12" x2="22" y2="12" />
+                <line x1="4.93" y1="19.07" x2="6.34" y2="17.66" /><line x1="17.66" y1="6.34" x2="19.07" y2="4.93" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
+          </button>
+        </span>
+      </div>
     </div>
   );
 }
