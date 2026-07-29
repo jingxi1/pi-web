@@ -7,6 +7,7 @@ import type {
   ExtensionUiRequest,
   ExtensionWidgetItem,
   SessionInfo,
+  SessionMessageEntry,
   SessionTreeNode,
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
@@ -15,6 +16,7 @@ import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import { emitNotifyEvent } from "@/lib/notify-emitter";
 import { isQuotaError } from "@/lib/quota-error";
 import { autoResumeStore } from "@/lib/auto-resume-store";
+import { toast } from "@/components/Toast";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
 export interface SessionData {
@@ -1276,16 +1278,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid) return;
     setForkingEntryId(entryId);
     try {
-      const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string }>(sid, {
+      const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string; firstUserMessage?: string }>(sid, {
         type: "fork",
         entryId,
       });
-      const { cancelled, newSessionId } = result ?? {};
+      const { cancelled, newSessionId, firstUserMessage } = result ?? {};
       if (!cancelled && newSessionId) {
         onSessionForked?.(newSessionId);
+        const preview = (firstUserMessage ?? "new session").slice(0, 48);
+        toast.success(
+          `Forked → “${preview}${firstUserMessage && firstUserMessage.length > 48 ? "…" : ""}”`,
+          {
+            duration: 6000,
+            action: {
+              label: "Switch to it",
+              onClick: () => onSessionForked?.(newSessionId),
+            },
+          },
+        );
       }
     } catch (e) {
       console.error("Fork failed:", e);
+      toast.error("Fork failed. Check the dev console for details.");
     } finally {
       setForkingEntryId(null);
     }
@@ -1310,6 +1324,57 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch(() => {});
     }
   }, [loadContext]);
+
+  // The "root" user message is the original first user message in the session.
+  // Walking the projected tree's top-level nodes and picking the first one that
+  // is a user message gives us the entry id that, when passed to navigate_tree,
+  // resets the LLM's view to "empty" while keeping all old entries in the file
+  // as unreachable history (recoverable via BranchNavigator).
+  const rootUserMessageId = useMemo<string | null>(() => {
+    const tree = data?.tree;
+    if (!tree || tree.length === 0) return null;
+    for (const node of tree) {
+      const entry = node.entry;
+      if (entry && entry.type === "message") {
+        const msg = (entry as SessionMessageEntry).message as { role?: string } | undefined;
+        if (msg?.role === "user") return entry.id;
+      }
+    }
+    return null;
+  }, [data?.tree]);
+
+  // We are "at root" when the active leaf is the root user message itself, or
+  // when the loaded context has no messages (post-reset state).
+  const atRoot = useMemo(() => {
+    if (!rootUserMessageId) return false;
+    if (messages.length === 0) return true;
+    if (activeLeafId === rootUserMessageId) return true;
+    // entryIds[0] is the entry id of the first displayed message at this leaf.
+    // If it equals the root user message id, the leaf is at the root.
+    if (entryIds[0] === rootUserMessageId) return true;
+    return false;
+  }, [rootUserMessageId, messages.length, activeLeafId, entryIds]);
+
+  // Reset is only allowed when there is something to reset to: an existing
+  // session with a root user message, currently not streaming/compacting, and
+  // the leaf is not already at the root.
+  const canResetContext = useMemo(() => {
+    if (isNew) return false;
+    if (!rootUserMessageId) return false;
+    if (atRoot) return false;
+    if (streamState.isStreaming) return false;
+    if (isCompacting) return false;
+    if (agentRunning) return false;
+    return true;
+  }, [isNew, rootUserMessageId, atRoot, streamState.isStreaming, isCompacting, agentRunning]);
+
+  // Drives the "reset to start" action. Goes through handleNavigate so we get
+  // the same optimistic UI update + RPC broadcast as branch switching.
+  const handleResetContext = useCallback(async () => {
+    if (!rootUserMessageId) return;
+    await handleNavigate(rootUserMessageId);
+    toast.success("Context reset");
+  }, [handleNavigate, rootUserMessageId]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
     if (isNew) {
@@ -1757,16 +1822,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     isNew,
+    // Reset-context derived state
+    rootUserMessageId, atRoot, canResetContext,
     // Refs
     sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     triggerResume,
-    handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
+    handleCompact, handleResetContext, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
     handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
+    scrollToBottom,
     dispatch, setAgentRunning, setForkingEntryId,
     bashRunning, pendingBash,
     // Subscriptions
