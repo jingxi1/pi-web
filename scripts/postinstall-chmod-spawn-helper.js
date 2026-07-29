@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Postinstall: ensure node-pty spawn-helper is executable on every platform.
 // npm's tar extraction doesn't preserve +x for prebuilt binaries, which makes
 // PTY.spawn fail silently on macOS/Linux ("posix_spawnp: No such file or

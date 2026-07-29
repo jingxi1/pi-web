@@ -65,8 +65,6 @@ export function AppShell() {
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
-  const [notifyConfigOpen, setNotifyConfigOpen] = useState(false);
-  const [tasksConfigOpen, setTasksConfigOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   // On mobile and tablet the sidebar is an overlay drawer; hide it by default
