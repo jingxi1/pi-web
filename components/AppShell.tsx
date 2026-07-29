@@ -12,6 +12,7 @@ import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { OpenClawIntegration } from "./openclaw-integration";
+import { ShortcutsPanel, setShortcutsPanelOpener } from "./ShortcutsPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
 import { autoResumeStore } from "@/lib/auto-resume-store";
@@ -65,6 +66,7 @@ export function AppShell() {
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   // On mobile and tablet the sidebar is an overlay drawer; hide it by default
@@ -77,6 +79,12 @@ export function AppShell() {
   }, []);
   useEffect(() => {
     setMobileSidebarReady(true);
+  }, []);
+
+  // Wire up module-level shortcuts panel opener
+  useEffect(() => {
+    setShortcutsPanelOpener(setShortcutsOpen);
+    return () => setShortcutsPanelOpener(null);
   }, []);
 
   // Swipe-left on the open sidebar to dismiss it (mobile/tablet drawer).
@@ -1566,6 +1574,7 @@ export function AppShell() {
       />
     )}
     <OpenClawIntegration />
+    <ShortcutsPanel open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </>
   );
 }
