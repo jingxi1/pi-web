@@ -1064,9 +1064,8 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
         flexShrink: 0,
         background: "transparent",
         padding: "0 16px 8px",
-        paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
-        transform: keyboardHeight > 0 ? `translateY(-${keyboardHeight}px)` : undefined,
-        transition: "transform 0.15s ease",
+        paddingRight: isMobile ? 16 : 52,
+        paddingBottom: keyboardHeight > 0 ? keyboardHeight : "max(0px, env(safe-area-inset-bottom, 0px))",
       }}
     >
       {/* Hidden file input — gallery picker */}
