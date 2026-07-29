@@ -449,7 +449,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [runningPanelOpen, setRunningPanelOpen] = useState(true);
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const [favoriteSessionIds, setFavoriteSessionIds] = useState<Set<string>>(() => new Set());
-  const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<"sessions" | "favorites">("sessions");
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
@@ -1755,78 +1754,27 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         </button>
       </div>
 
-      {/* Favorites panel — shows favorited sessions from any project, so the
-          user can jump back to them regardless of the current project filter.
-          Only rendered when there are favorites (matching the RUNNING panel's
-          visibility logic), so the sidebar stays uncluttered by default. */}
+      {/* Favorites tab — flat list, no folding */}
       {sidebarTab === "favorites" && favoriteSessions.length > 0 && (
-        <div
-          style={{
-            borderTop: "1px solid var(--border)",
-            display: "flex",
-            flexDirection: "column",
-            flex: favoritesPanelOpen ? "0 1 auto" : "0 0 auto",
-            maxHeight: favoritesPanelOpen ? "min(45%, 320px)" : undefined,
-            minHeight: 0,
-            overflow: "hidden",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-            <button
-              onClick={() => setFavoritesPanelOpen((v) => !v)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                flex: 1,
-                padding: "6px 10px",
-                background: "none",
-                border: "none",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: "0.05em",
-                textTransform: "uppercase",
-                textAlign: "left",
+        <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", borderTop: "1px solid var(--border)" }}>
+          {favoriteSessions.map((s) => (
+            <SessionItem
+              key={s.id}
+              session={s}
+              isSelected={s.id === selectedSessionId}
+              isRunning={runningSessionIds.has(s.id)}
+              isUnread={false}
+              isFavorite
+              onClick={() => handleSelectSessionFromList(s)}
+              onRenamed={loadSessions}
+              onDeleted={(id) => {
+                onSessionDeleted?.(id);
+                loadSessions();
               }}
-            >
-              <svg
-                width="9" height="9" viewBox="0 0 10 10" fill="none"
-                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
-                style={{ transform: favoritesPanelOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
-              >
-                <polyline points="3 2 7 5 3 8" />
-              </svg>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" strokeWidth="1" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-              </svg>
-              Favorites
-              <span style={{ marginLeft: 2, opacity: 0.7, fontWeight: 500 }}>· {favoriteSessions.length}</span>
-            </button>
-          </div>
-          {favoritesPanelOpen && (
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-              {favoriteSessions.map((s) => (
-                <SessionItem
-                  key={s.id}
-                  session={s}
-                  isSelected={s.id === selectedSessionId}
-                  isRunning={runningSessionIds.has(s.id)}
-                  isUnread={false}
-                  isFavorite
-                  onClick={() => handleSelectSessionFromList(s)}
-                  onRenamed={loadSessions}
-                  onDeleted={(id) => {
-                    onSessionDeleted?.(id);
-                    loadSessions();
-                  }}
-                  onToggleFavorite={handleToggleFavorite}
-                  depth={0}
-                />
-              ))}
-            </div>
-          )}
+              onToggleFavorite={handleToggleFavorite}
+              depth={0}
+            />
+          ))}
         </div>
       )}
 
