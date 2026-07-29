@@ -55,7 +55,7 @@ export function OpenClawIntegration() {
         title="Notify"
         style={{
           display: "flex", alignItems: "center", justifyContent: "center",
-          width: 32, height: 32, padding: 0,
+          width: "100%", height: 32, padding: 0,
           background: "none", border: "none",
           color: "var(--text-muted)",
           borderRadius: 9, cursor: "pointer",
@@ -75,7 +75,7 @@ export function OpenClawIntegration() {
         title="Tasks"
         style={{
           display: "flex", alignItems: "center", justifyContent: "center",
-          width: 32, height: 32, padding: 0,
+          width: "100%", height: 32, padding: 0,
           background: "none", border: "none",
           color: "var(--text-muted)",
           borderRadius: 9, cursor: "pointer",

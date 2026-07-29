@@ -594,7 +594,7 @@ export function AppShell() {
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
       />
-      <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
+      <div style={{ padding: "8px", flexShrink: 0, display: "grid", alignItems: "stretch", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 4 }}>
         {([
           {
              label: translate("common.models"),
@@ -654,7 +654,7 @@ export function AppShell() {
             {icon}
           </button>
         ))}
-        <div id="openclaw-toolbar-slot" style={{ display: "flex", gap: 5, alignItems: "center" }} />
+        <div id="openclaw-toolbar-slot" style={{ display: "grid", gridTemplateColumns: "subgrid", gridColumn: "span 2", gap: 4 }} />
       </div>
     </>
   );
