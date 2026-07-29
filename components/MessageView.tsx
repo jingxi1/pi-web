@@ -739,40 +739,45 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
         </svg>
       </button>
 
-      {/* ── Expanded: input args ── */}
-      {expanded && !isEditTool && (
-        <pre
-          style={{
-            margin: 0,
-            padding: "8px 10px",
-            color: "var(--text-muted)",
-            fontSize: 12,
-            lineHeight: 1.5,
-            overflow: "auto",
-            background: "var(--bg-subtle)",
-            borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-          }}
-        >
-          {inputStr}
-        </pre>
-      )}
-
-      {/* ── Paired result — only shown when expanded ── */}
-      {expanded && result && (
-        resultDiff ? (
-          <PairedDiffResult
-            diff={resultDiff}
-          />
-        ) : (
-          <PairedResult
-            text={resultText ?? ""}
-            isEmpty={resultIsEmpty}
-            isError={isError}
-          />
-        )
-      )}
+      {/* ── Animated body: input args + paired result ── */}
+      <div
+        className={`tool-call-body${expanded ? " is-expanded" : ""}`}
+        aria-hidden={!expanded}
+      >
+        <div className="tool-call-body-inner">
+          {!isEditTool && (
+            <pre
+              style={{
+                margin: 0,
+                padding: "8px 10px",
+                color: "var(--text-muted)",
+                fontSize: 12,
+                lineHeight: 1.5,
+                overflow: "auto",
+                background: "var(--bg-subtle)",
+                borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
+            >
+              {inputStr}
+            </pre>
+          )}
+          {result && (
+            resultDiff ? (
+              <PairedDiffResult
+                diff={resultDiff}
+              />
+            ) : (
+              <PairedResult
+                text={resultText ?? ""}
+                isEmpty={resultIsEmpty}
+                isError={isError}
+              />
+            )
+          )}
+        </div>
+      </div>
     </div>
   );
 }

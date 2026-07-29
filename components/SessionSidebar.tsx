@@ -898,32 +898,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // render the same session twice).
   const allSchedules = useAllAutoResumeSchedules();
   const waitingSchedules = allSchedules.filter((s) => !runningSessionIds.has(s.sessionId));
-
-  // Optimistic favorite toggle: flip local state immediately, revert on failure.
-  const handleToggleFavorite = useCallback(async (sessionId: string, next: boolean) => {
-    const prev = favoriteSessionIds;
-    setFavoriteSessionIds((cur) => {
-      const updated = new Set(cur);
-      if (next) updated.add(sessionId);
-      else updated.delete(sessionId);
-      return updated;
-    });
-    try {
-      const res = await fetch("/api/sessions/favorites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, favorite: next }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch {
-      setFavoriteSessionIds(prev);
-    }
-  }, [favoriteSessionIds]);
-
-  // Favorited sessions surfaced in a dedicated FAVORITES panel.
-  const favoriteSessions = allSessions
-    .filter((s) => favoriteSessionIds.has(s.id))
-    .sort((a, b) => b.modified.localeCompare(a.modified));
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -1934,7 +1908,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             runningSessionIds={runningSessionIds}
             unreadSessionIds={unreadSessionIds}
             favoriteSessionIds={favoriteSessionIds}
-            onToggleFavorite={handleToggleFavorite}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
             onSessionDeleted={(id) => {
@@ -2327,7 +2300,6 @@ function SessionTreeItem({
               onSelectSession={onSelectSession}
               onRenamed={onRenamed}
               onSessionDeleted={onSessionDeleted}
-              onToggleFavorite={onToggleFavorite}
               depth={depth + 1}
             />
           ))}
@@ -2442,28 +2414,6 @@ function WaitingSessionIndicator() {
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
         <circle cx="12" cy="12" r="9" />
         <polyline points="12 7 12 12 15 14" />
-      </svg>
-    </span>
-  );
-}
-
-function FavoriteIndicator() {
-  return (
-    <span
-      title="Favorited"
-      aria-label="Favorited session"
-      style={{
-        width: 14,
-        height: 14,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        color: "#f59e0b",
-      }}
-    >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "block" }}>
-        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
       </svg>
     </span>
   );
