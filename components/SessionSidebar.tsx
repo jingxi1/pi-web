@@ -450,7 +450,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const [favoriteSessionIds, setFavoriteSessionIds] = useState<Set<string>>(() => new Set());
   const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(true);
-  const [sidebarTab, setSidebarTab] = useState<"sessions" | "favorites">("sessions");
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
@@ -874,30 +873,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
     : allSessions;
 
-  // Build parent-child tree within the filtered set.
-  // useMemo so we don't re-walk the parent chain on every unrelated render
-  // (e.g. explorer toggle, dropdown open/close, SSE running-id updates).
-  const sessionTree = useMemo(() => buildSessionTree(filteredSessions), [filteredSessions]);
-  // Running sessions — surfaced in a dedicated "RUNNING" panel regardless of
-  // the current project filter, so the user can always see and jump to agents
-  // that are still working in other worktrees.
-  const runningSessions = allSessions.filter((s) => runningSessionIds.has(s.id));
-  // Favorited sessions — surfaced in a dedicated "FAVORITES" panel regardless
-  // of the current project filter, so the user can jump to pinned sessions
-  // in any project without having to switch projects first. Only sessions
-  // that still exist are kept; dangling favorites (session file deleted out
-  // of band) are dropped silently and the API cleans them up on the next
-  // DELETE or read.
+  // Optimistic favorite toggle: flip local state immediately, revert on failure.
+  const handleToggleFavorite = useCallback(async (sessionId: string, next: boolean) => {
+    const prev = favoriteSessionIds;
+    setFavoriteSessionIds((cur) => {
+      const updated = new Set(cur);
+      if (next) updated.add(sessionId);
+      else updated.delete(sessionId);
+      return updated;
+    });
+    try {
+      const res = await fetch("/api/sessions/favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, favorite: next }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+      setFavoriteSessionIds(prev);
+    }
+  }, [favoriteSessionIds]);
+
+  // Favorited sessions surfaced in a dedicated FAVORITES panel.
   const favoriteSessions = allSessions
     .filter((s) => favoriteSessionIds.has(s.id))
     .sort((a, b) => b.modified.localeCompare(a.modified));
-  // Quota-stuck sessions — agents that hit a billing/quota error and are
-  // waiting for the provider's interval to reset. The store is shared across
-  // providers, but we drop any session that's already in the running set
-  // (a race between the running SSE and the store update could otherwise
-  // render the same session twice).
-  const allSchedules = useAllAutoResumeSchedules();
-  const waitingSchedules = allSchedules.filter((s) => !runningSessionIds.has(s.sessionId));
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -1908,6 +1908,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             runningSessionIds={runningSessionIds}
             unreadSessionIds={unreadSessionIds}
             favoriteSessionIds={favoriteSessionIds}
+            onToggleFavorite={handleToggleFavorite}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
             onSessionDeleted={(id) => {
@@ -2250,7 +2251,7 @@ function SessionTreeItem({
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
-  onToggleFavorite?: (id: string, next: boolean) => void;
+  onToggleFavorite: (sessionId: string, next: boolean) => void;
   depth: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -2276,6 +2277,7 @@ function SessionTreeItem({
           isRunning={runningSessionIds.has(node.session.id)}
           isUnread={unreadSessionIds.has(node.session.id)}
           isFavorite={favoriteSessionIds.has(node.session.id)}
+          onToggleFavorite={onToggleFavorite}
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
           onDeleted={(id) => onSessionDeleted?.(id)}
@@ -2396,11 +2398,11 @@ function UnreadSessionIndicator() {
   );
 }
 
-function WaitingSessionIndicator() {
+function FavoriteIndicator() {
   return (
     <span
-      title="Waiting for token quota to reset…"
-      aria-label="Waiting for quota reset"
+      title="Favorited"
+      aria-label="Favorited session"
       style={{
         width: 14,
         height: 14,
@@ -2408,126 +2410,13 @@ function WaitingSessionIndicator() {
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
-        color: "#d97706",
+        color: "#f59e0b",
       }}
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
-        <circle cx="12" cy="12" r="9" />
-        <polyline points="12 7 12 12 15 14" />
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "block" }}>
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
       </svg>
     </span>
-  );
-}
-
-function formatRemainingMs(ms: number): string {
-  if (ms <= 0) return "any moment";
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
-function WaitingSessionItem({
-  session,
-  schedule,
-  isSelected,
-  onClick,
-  onCancel,
-}: {
-  session: SessionInfo | undefined;
-  schedule: AutoResumeSchedule;
-  isSelected: boolean;
-  onClick: () => void;
-  onCancel: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const remainMs = Math.max(0, schedule.wakesAt - now);
-  const title = session?.name
-    || schedule.lastPrompt.split("\n")[0].slice(0, 50)
-    || schedule.sessionId.slice(0, 12);
-  const subtitle = session
-    ? `auto-resume in ${formatRemainingMs(remainMs)}`
-    : `auto-resume in ${formatRemainingMs(remainMs)} · ${schedule.lastPrompt.split("\n")[0].slice(0, 40)}`;
-
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      title={schedule.lastPrompt}
-      style={{
-        height: 54,
-        display: "flex",
-        alignItems: "center",
-        padding: "0 8px 0 14px",
-        cursor: "pointer",
-        background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
-        borderLeft: isSelected ? "2px solid var(--accent)" : "2px solid transparent",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
-        <WaitingSessionIndicator />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{
-            fontSize: 13,
-            color: "var(--text)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            lineHeight: 1.25,
-          }}>
-            {title}
-          </div>
-          <div style={{
-            fontSize: 11,
-            color: "#d97706",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            lineHeight: 1.3,
-            marginTop: 2,
-          }}>
-            {subtitle}
-          </div>
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onCancel();
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
-        title="Cancel auto-resume"
-        aria-label="Cancel auto-resume"
-        style={{
-          background: "transparent",
-          border: "none",
-          color: hovered ? "var(--text-dim)" : "transparent",
-          cursor: "pointer",
-          padding: 4,
-          marginLeft: 4,
-          fontSize: 16,
-          lineHeight: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-          borderRadius: 4,
-        }}
-      >
-        ×
-      </button>
-    </div>
   );
 }
 
@@ -2554,7 +2443,7 @@ function SessionItem({
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
-  onToggleFavorite?: (id: string, next: boolean) => void;
+  onToggleFavorite?: (sessionId: string, next: boolean) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -2654,20 +2543,11 @@ function SessionItem({
         /* ── Delete confirmation: same height, two flat buttons ── */
         <>
           <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-{isFavorite ? (
-              <>
-                <span style={{ color: "#f59e0b", fontWeight: 600 }}>★ {t("sidebar.favorited")}.</span>{" "}
-                {t("sidebar.stillDelete")} <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 18)}{title.length > 18 ? "…" : ""}&rdquo;</span>?
-              </>
-            ) : (
-              <>
-                {t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })}
-                {isFavorite && (
-                  <div style={{ color: "#f59e0b", fontSize: 11, fontWeight: 500, marginTop: 1 }}>
-                    ★ Favorited. Will unpin from sidebar.
-                  </div>
-                )}
-              </>
+            {t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })}
+            {isFavorite && (
+              <div style={{ color: "#f59e0b", fontSize: 11, fontWeight: 500, marginTop: 1 }}>
+                ★ Favorited. Will unpin from sidebar.
+              </div>
             )}
           </div>
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>

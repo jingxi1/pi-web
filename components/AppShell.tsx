@@ -1565,7 +1565,7 @@ export function AppShell() {
         onReloaded={() => setSessionKey((k) => k + 1)}
       />
     )}
-<OpenClawIntegration />
+    <OpenClawIntegration />
     </>
   );
 }
