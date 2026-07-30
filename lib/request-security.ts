@@ -65,9 +65,17 @@ export function isApiRequestHostAllowed(
   if (!hostname) return false;
   if (isLoopbackHostname(hostname) || isIP(hostname)) return true;
 
-  return configuredHostnames.some(
-    (configured) => normalizeConfiguredHostname(configured) === hostname,
-  );
+  return configuredHostnames.some((configured) => {
+    const normalized = normalizeConfiguredHostname(configured);
+    if (!normalized) return false;
+    if (normalized.startsWith("*.")) {
+      // Wildcard: *.5ddd.com matches pi.5ddd.com, 5ddd.com, etc.
+      const suffix = normalized.slice(1); // e.g. ".5ddd.com"
+      return hostname === suffix.slice(2) || hostname.endsWith(suffix);
+    }
+    return normalized === hostname;
+  });
+  
 }
 
 /** Reject browser cross-site API requests while preserving non-browser clients. */
