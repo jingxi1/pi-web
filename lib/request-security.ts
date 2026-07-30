@@ -23,7 +23,10 @@ function hostnameFromAuthority(value: string): string | null {
 function normalizeConfiguredHostname(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) return null;
-  return isIP(trimmed) ? normalizeHostname(trimmed) : hostnameFromAuthority(trimmed);
+  if (isIP(trimmed)) return normalizeHostname(trimmed);
+  // Wildcard patterns (e.g. "*.5ddd.com") can't be parsed as URLs.
+  if (trimmed.startsWith("*.")) return trimmed.toLowerCase();
+  return hostnameFromAuthority(trimmed);
 }
 
 function isLoopbackHostname(hostname: string): boolean {
