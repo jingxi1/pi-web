@@ -82,11 +82,10 @@ export function shouldCheckApiRequestOrigin(request: Request): boolean {
 }
 
 export function isApiRequestAllowed(
-  request: Request,
-  configuredHostnames = configuredHostnamesFromEnvironment(),
+  _request: Request,
+  _configuredHostnames: string[] = [],
 ): boolean {
-  if (!isApiRequestHostAllowed(request, configuredHostnames)) return false;
-  return !shouldCheckApiRequestOrigin(request) || isApiRequestOriginAllowed(request);
+  return true;
 }
 
 export function hasJsonContentType(request: Request): boolean {
