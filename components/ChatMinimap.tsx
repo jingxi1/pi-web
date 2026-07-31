@@ -9,6 +9,7 @@ interface Props {
   streamingMessage: Partial<AgentMessage> | null;
   scrollContainer: RefObject<HTMLDivElement | null>;
   messageRefs: RefObject<(HTMLDivElement | null)[]>;
+  onRevealHistory?: () => void;
 }
 
 const MINIMAP_WIDTH = 36;
@@ -65,7 +66,7 @@ interface NodeInfo {
   index: number;
 }
 
-export function ChatMinimap({ messages, streamingMessage, scrollContainer, messageRefs }: Props) {
+export function ChatMinimap({ messages, streamingMessage, scrollContainer, messageRefs, onRevealHistory }: Props) {
   // Three-tier visibility: full sidebar on desktop, hidden on mobile/tablet
   // (tablet uses ChatMinimapFab in components/ChatMinimapFab.tsx).
   const breakpoint = useBreakpoint();
@@ -84,6 +85,13 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
   );
   const allMessagesRef = useRef(allMessages);
   allMessagesRef.current = allMessages;
+
+  // Call onRevealHistory when scrolled to near the top (revealing more history)
+  useEffect(() => {
+    if (scrollRatio < 0.01 && onRevealHistory) {
+      onRevealHistory();
+    }
+  }, [scrollRatio, onRevealHistory]);
 
   // --- 仅更新视口比例，不读取 DOM ---
   const updateScroll = useCallback(() => {
