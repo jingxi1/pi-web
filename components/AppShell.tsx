@@ -12,7 +12,6 @@ import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { OpenClawIntegration } from "./openclaw-integration";
-import { ShortcutsPanel, setShortcutsPanelOpener } from "./ShortcutsPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
 import { autoResumeStore } from "@/lib/auto-resume-store";
@@ -66,7 +65,6 @@ export function AppShell() {
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   // On mobile and tablet the sidebar is an overlay drawer; hide it by default
@@ -79,12 +77,6 @@ export function AppShell() {
   }, []);
   useEffect(() => {
     setMobileSidebarReady(true);
-  }, []);
-
-  // Wire up module-level shortcuts panel opener
-  useEffect(() => {
-    setShortcutsPanelOpener(setShortcutsOpen);
-    return () => setShortcutsPanelOpener(null);
   }, []);
 
   // Swipe-left on the open sidebar to dismiss it (mobile/tablet drawer).
@@ -157,7 +149,6 @@ export function AppShell() {
   const handleSelectedModelChange = useCallback((_modelId: string, providerId: string) => {
     setCurrentProviderId(providerId || null);
   }, []);
-
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | "session" | "language" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -594,7 +585,7 @@ export function AppShell() {
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
       />
-      <div style={{ padding: "8px", flexShrink: 0, display: "grid", alignItems: "stretch", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 4 }}>
+      <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
           {
              label: translate("common.models"),
@@ -654,7 +645,7 @@ export function AppShell() {
             {icon}
           </button>
         ))}
-        <div id="openclaw-toolbar-slot" style={{ display: "grid", gridTemplateColumns: "subgrid", gridColumn: "span 2", gap: 4 }} />
+        <div id="openclaw-toolbar-slot" style={{ display: "flex", gap: 5, alignItems: "center" }} />
       </div>
     </>
   );
@@ -732,7 +723,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{ display: "flex", height: "100%", overflow: "hidden", background: "var(--bg)" }}>
+    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -1574,7 +1565,6 @@ export function AppShell() {
       />
     )}
     <OpenClawIntegration />
-    <ShortcutsPanel open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </>
   );
 }

@@ -23,10 +23,7 @@ function hostnameFromAuthority(value: string): string | null {
 function normalizeConfiguredHostname(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) return null;
-  if (isIP(trimmed)) return normalizeHostname(trimmed);
-  // Wildcard patterns (e.g. "*.5ddd.com") can't be parsed as URLs.
-  if (trimmed.startsWith("*.")) return trimmed.toLowerCase();
-  return hostnameFromAuthority(trimmed);
+  return isIP(trimmed) ? normalizeHostname(trimmed) : hostnameFromAuthority(trimmed);
 }
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -54,16 +51,40 @@ function getRequestOrigin(request: Request): string | null {
   return host ? canonicalOrigin(`${requestUrl.protocol}//${host}`) : null;
 }
 
+function isUserInitiatedSessionExportNavigation(request: Request): boolean {
+  if (
+    request.method !== "GET"
+    || request.headers.get("sec-fetch-mode") !== "navigate"
+    || request.headers.get("sec-fetch-dest") !== "document"
+    || request.headers.get("sec-fetch-user") !== "?1"
+  ) {
+    return false;
+  }
+
+  try {
+    return /^\/api\/sessions\/[^/]+\/export$/.test(new URL(request.url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Only trust local names, IP literals, or the hostname explicitly selected by
  * the operator. IP literals preserve LAN access but cannot be DNS-rebound
  * because the browser keeps the literal address in the Host header.
  */
 export function isApiRequestHostAllowed(
-  _request: Request,
-  _configuredHostnames: string[] = [],
+  request: Request,
+  configuredHostnames = configuredHostnamesFromEnvironment(),
 ): boolean {
-  return true;
+  const host = request.headers.get("host");
+  const hostname = host ? hostnameFromAuthority(host) : null;
+  if (!hostname) return false;
+  if (isLoopbackHostname(hostname) || isIP(hostname)) return true;
+
+  return configuredHostnames.some(
+    (configured) => normalizeConfiguredHostname(configured) === hostname,
+  );
 }
 
 /** Reject browser cross-site API requests while preserving non-browser clients. */
@@ -82,10 +103,12 @@ export function shouldCheckApiRequestOrigin(request: Request): boolean {
 }
 
 export function isApiRequestAllowed(
-  _request: Request,
-  _configuredHostnames: string[] = [],
+  request: Request,
+  configuredHostnames = configuredHostnamesFromEnvironment(),
 ): boolean {
-  return true;
+  if (!isApiRequestHostAllowed(request, configuredHostnames)) return false;
+  if (isUserInitiatedSessionExportNavigation(request)) return true;
+  return !shouldCheckApiRequestOrigin(request) || isApiRequestOriginAllowed(request);
 }
 
 export function hasJsonContentType(request: Request): boolean {
