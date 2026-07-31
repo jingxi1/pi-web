@@ -652,7 +652,6 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                   ? withAssistantBlocks(finalAssistant, finalSplit.processBlocks, { omitUsage: true })
                   : null;
                               const finalAnswerMessage = finalSplit.answerBlocks.length > 0 || getAssistantErrorMessage(finalAssistant)
->>>>>>> upstream/main
                   ? withAssistantBlocks(finalAssistant, finalSplit.answerBlocks)
                   : null;
 
