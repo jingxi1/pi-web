@@ -13,7 +13,6 @@ import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { OpenClawIntegration } from "./openclaw-integration";
 import { BranchNavigator } from "./BranchNavigator";
-import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
 import { autoResumeStore } from "@/lib/auto-resume-store";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
@@ -1067,8 +1066,6 @@ export function AppShell() {
               </button>
             </div>
           )}
-          {/* Token-plan quota — only when current model belongs to a tracked provider */}
-          <MinimaxTokenPlanBar enabled={currentProviderId === "minimax-cn"} />
           {/* Session stats — right-aligned in top bar */}
           {showChat && (sessionStats || contextUsage) && (() => {
              const tokens = sessionStats?.tokens;
@@ -1564,7 +1561,7 @@ export function AppShell() {
         onReloaded={() => setSessionKey((k) => k + 1)}
       />
     )}
-    <OpenClawIntegration />
+    <OpenClawIntegration providerId={currentProviderId} />
     </>
   );
 }

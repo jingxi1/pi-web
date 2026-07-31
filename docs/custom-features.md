@@ -7,6 +7,21 @@
 ---
 
 ## 目录
+17. [扩展 UI 解析器](#17-扩展-ui-解析器-extension-custom-ui-parser)
+18. [代码块复制反馈 + 微交互动画](#18-代码块复制反馈--微交互动画)
+19. [辅助工具与基础设施](#19-辅助工具与基础设施)
+20. [PWA 支持](#20-pwa-支持)
+21. [模型价格预设 & 上游发现](#21-模型价格预设--上游发现)
+22. [系统架构与数据流图](#22-系统架构与数据流图)
+23. [接口契约 (API Contract)](#23-接口契约-api-contract)
+24. [CSS 类名与 Keyframes 清单](#24-css-类名与-keyframes-清单)
+25. [全局变量 (globalThis 注册表)](#25-全局变量-globalthis-注册表)
+26. [测试策略](#26-测试策略)
+27. [环境变量清单](#27-环境变量清单)
+28. [更新日志 (f152945 之后)](#28-更新日志-f152945-之后)
+
+
+
 
 1. [邮件通知系统](#1-邮件通知系统-notify)
 2. [定时任务系统](#2-定时任务系统-scheduled-tasks)
@@ -645,7 +660,71 @@ AppShell 将 sidebar 开关逻辑从 `useIsMobile` 升级为 `useBreakpoint`，�
 
 ---
 
-## 20. 系统架构与数据流图
+
+---
+
+## 20. PWA 支持
+
+### 概述
+将 pi-web 转化为可安装的 Progressive Web App（PWA），支持离线访问、桌面图标安装、后台缓存。
+
+### 文件清单
+| 文件 | 行数 | 作用 |
+|------|------|------|
+| `app/manifest.ts` | 32 | 浏览器 PWA manifest（name, icons, theme_color, display） |
+| `components/PwaRegistration.tsx` | 33 | React 组件：监听 `beforeinstallprompt` → 触发安装 |
+| `public/sw.js` | 76 | Service Worker：fetch cache-first → network fallback；offline.html 兜底 |
+| `public/offline.html` | 83 | 离线时的静态 fallback 页面 |
+| `public/icons/icon-192.png` | — | PWA 图标 192×192 |
+| `public/icons/icon-512.png` | — | PWA 图标 512×512 |
+| `public/icons/apple-touch-icon.png` | — | iOS Safari 专用图标 |
+| `app/layout.tsx` | +37 | `next-pwa` 注册 script；`manifest` meta link |
+| `next.config.ts` | +13 | `next-pwa` webpack plugin 配置 |
+
+### 行为
+1. 浏览器加载时注册 service worker（`/sw.js`）
+2. 检测到 `beforeinstallprompt` 事件时 `PwaRegistration` 组件弹出安装按钮
+3. 安装后：打开 `pi-web` 时显示为独立窗口（`display: standalone`）
+4. 离线访问时返回 `offline.html`
+
+### 扩展点
+- 修改 `app/manifest.ts` 调整 name/description/icons（需同时更新 `public/icons/` 目录）
+
+---
+
+## 21. 模型价格预设 & 上游发现
+
+### 概述
+在模型管理界面提供价格预设表格，并支持从上游提供商（OpenAI、Anthropic 等）API 发现可用模型。
+
+### 文件清单
+| 文件 | 行数 | 作用 |
+|------|------|------|
+| `lib/model-catalog.ts` | 404 | 价格预设目录：`getPricingPresets()` 返回结构化价格数据 |
+| `lib/model-discovery.ts` | 75 | 上游模型发现：调用 OpenAI/Anthropic 等 API 获取模型列表 |
+| `lib/model-discovery-auth.ts` | 58 | 认证解析：从 provider 配置中提取 API key 并构建请求头 |
+| `app/api/models-config/catalog/route.ts` | 78 | GET 返回价格预设（带缓存） |
+| `app/api/models-config/discover/route.ts` | 88 | POST 触发上游模型发现（传入 providerName + provider config） |
+| `components/ModelsConfig.tsx` | +381 | 模型配置 UI 扩展：价格表格 + 发现按钮 |
+| `lib/model-catalog.test.mjs` | 223 | 价格预设单元测试 |
+| `lib/model-discovery.test.mjs` | 50 | 模型发现单元测试 |
+
+### 数据流（发现）
+```
+ModelsConfig UI
+  ↓ POST /api/models-config/discover
+  ↓  body: { providerName: "openai", provider: { apiKey, baseUrl, ... } }
+  ↓ resolveModelDiscoveryAuth() → headers
+  ↓ buildModelsListUrl()
+  ↓ API 请求 → parseDiscoveredModels()
+  ↓ 返回 { models: [...], errors: [...] }
+```
+
+### 扩展点
+1. **新增上游提供商**：在 `model-discovery-auth.ts` 加新的 `resolveAuth` case
+2. **新增价格预设**：在 `model-catalog.ts` 的 `getPricingPresets()` 返回对象中加 entry
+3. **过滤模型选项**：`ChatInput.tsx` 已支持输入过滤显示（894babf）
+## 22. 系统架构与数据流图
 
 ### 全局模块依赖
 
@@ -695,9 +774,27 @@ flowchart LR
         notifyRoute --> notifyFile[~/.pi/agent/notify.json]
         stRoute --> stFile[~/.pi/agent/scheduled-tasks.json]
     end
+
+    subgraph 模型管理
+        MC --> catalog[/api/models-config/catalog]
+        MD --> discover[/api/models-config/discover]
+    end
+
+    subgraph PWA
+        CW --> PWA[PwaRegistration]
+        PWA --> SW[public/sw.js]
+        SW --> offline[offline.html]
+    end
 ```
 
-### 数据持久化路径
+### 新增依赖关系（f152945 之后）
+
+| 新增组件 | 依赖 | 说明 |
+|----------|------|------|
+| `PwaRegistration` | `sw.js`, `offline.html` | 注册 service worker，监听安装事件 |
+| `ModelsConfig` | `catalog/route.ts` | 显示价格预设 |
+| `ModelsConfig` | `discover/route.ts` | 调用上游 API 发现模型 |
+| `model-discovery-auth` | 上游 API | 构建认证 header（OpenAI/Anthropic/Google） |
 
 | 功能 | 存储文件 | 位置 |
 |------|----------|------|
@@ -744,6 +841,8 @@ flowchart LR
 | `app/api/terminal/command/route.ts` | 79 | 单次命令执行 |
 | `app/api/token-plan/[provider]/route.ts` | 117 | 配额查询 |
 | `app/api/diag/node-pty/route.ts` | 65 | PTY 诊断 |
+| `app/api/models-config/catalog/route.ts` | 78 | 价格预设 |
+| `app/api/models-config/discover/route.ts` | 88 | 上游模型发现 |
 
 ### 新增 lib 模块
 
@@ -765,6 +864,9 @@ flowchart LR
 | `lib/quota-error.ts` | 18 | 配额错误检测 |
 | `lib/time-format.ts` | 15 | 时间格式化 |
 | `lib/extension-custom-ui-parser.ts` | 309 | 扩展 UI 解析（select/confirm/input/editor → UI 描述对象） |
+| `lib/model-catalog.ts` | 404 | 价格预设目录 | |
+| `lib/model-discovery.ts` | 75 | 上游模型发现 |
+| `lib/model-discovery-auth.ts` | 58 | 认证解析 |
 
 ### 新增 UI 组件
 
@@ -778,6 +880,7 @@ flowchart LR
 | `components/ChatMinimapFab.tsx` | 224 | 消息快速跳转 |
 | `components/Toast.tsx` | 285 | Toast 组件 |
 | `components/openclaw-integration.tsx` | 119 | OpenClaw 集成边界 |
+| `components/PwaRegistration.tsx` | 33 | PWA 注册组件 |
 
 ### 新增 hooks
 
@@ -807,10 +910,21 @@ flowchart LR
 | `hooks/useAgentSession.ts` | notify 事件发射/配额错误自动恢复/reset context/compact error auto-dismiss |
 | `hooks/useIsMobile.ts` | 微调 |
 | `lib/rpc-manager.ts` | 微调 |
+| `components/openclaw-integration.tsx` | ✅ 已模块化：OpenClaw 唯一集成边界（toolbar portal + modals + TokenPlanBar） |
 
 ---
 
-## §21 接口契约 (API Contract)
+### 28.5 集成改进（2026-08-01）
+
+| 变更 | 说明 |
+|------|------|
+| `openclaw-integration.tsx` | 创建独立组件：Notify/Tasks 按钮通过 `createPortal` 注入 AppShell toolbar slot，modals 和 TokenPlanBar 在内部渲染 |
+| `AppShell.tsx` | 删除重复的 `<MinimaxTokenPlanBar>` 渲染和 import，改为 `<OpenClawIntegration providerId={currentProviderId} />` |
+| `OPENCLAW-INTEGRATION.md` | §5 功能清单状态全部改为 ✅，§9 TODO 全部完成 |
+
+---
+
+## §23 接口契约 (API Contract)
 
 > 本节定义所有自定义 API 路由的 request/response TypeScript 类型签名，以及 HTTP 状态码行为。
 > 开发 agent 可以直接将这些类型定义作为 spec 实现。
@@ -1169,7 +1283,7 @@ interface DiagResponse {
 
 ---
 
-## §22 CSS 类名与 Keyframes 清单
+## §24 CSS 类名与 Keyframes 清单
 
 > 以下列出所有在 `app/globals.css` 中新增的 CSS class 和 keyframes。
 > 注：CSS 变量颜色变化已在 §11 列出，此处不重复。
@@ -1220,7 +1334,7 @@ interface DiagResponse {
 
 ---
 
-## §23 全局变量 (globalThis 注册表)
+## §25 全局变量 (globalThis 注册表)
 
 > 本 fork 多处使用 `globalThis` 注册表模式，使得数据缓存和实例在 Next.js hot-reload 时存活。
 
@@ -1283,7 +1397,7 @@ const TICK_KEY = "__pi_web_scheduled_tasks_scheduler__";
 
 ---
 
-## §24 测试策略
+## §26 测试策略
 
 > 本节定义新增功能的最低测试要求，用于 CI 验收和开发 agent 自检。
 
@@ -1348,7 +1462,7 @@ node_modules/.bin/tsc --noEmit
 
 ---
 
-## §25 环境变量清单
+## §27 环境变量清单
 
 | 变量 | 用途 | 必填 | 读取位置 |
 |------|------|------|----------|
@@ -1360,3 +1474,71 @@ node_modules/.bin/tsc --noEmit
 | `WORKSPACE_DIR` | Docker 容器内的默认工作目录 | 否 | `lib/terminal-manager.ts` `resolveCwd()` |
 | `PI_CODING_AGENT_DIR` | pi agent 数据目录覆盖 | 否 | `lib/terminal-manager.ts` `resolveCwd()` |
 | `GIT_REPO_URL` | Docker 入口脚本自动 clone 的仓库 | 否 | `docker-entrypoint.sh` |
+
+---
+
+## 28. 更新日志 (f152945 之后)
+
+> 本文档最初编写时的基准 commit 是 `f152945`（gitlab-on-upstream-main merge）。
+> 以下记录之后的所有变更，帮助保持文档与代码同步。
+
+### 28.1 Upstream v0.8.3 → v0.8.4 合并（2026-08-01）
+
+#### Upstream v0.8.3 主要变更（部分）
+| Commit | 说明 | 影响 |
+|--------|------|------|
+| `556e2ec` | fix: surface provider and compaction errors | `useAgentSession.ts` error handling |
+| `dbd583b` | feat: improve chat minimap navigation | `ChatMinimap.tsx` 重写，新增 `ChatMinimap.module.css` |
+
+#### Upstream v0.8.4 主要变更
+| Commit | 说明 | 影响 |
+|--------|------|------|
+| `c1f0f04` | feat: pricing presets + upstream model discovery | 新增 11 文件（model-catalog.ts, model-discovery.ts, 2 个 API route） |
+| `894babf` | feat: filter model selector options | `ChatInput.tsx` + 模型过滤 UI |
+| `6885309` | feat: add PWA support | PWA 相关文件（manifest.ts, PwaRegistration.tsx, sw.js） |
+| `d362764` | fix: allow PWA session export navigation | `next.config.ts` 调整 |
+| `d35c61f` | fix: preserve extension-injected message streaming | `useAgentSession.ts` |
+
+#### 本地变更（f152945 之后）
+| Commit | 说明 | 影响 |
+|--------|------|------|
+| `a94ac6b` | clean remaining conflict markers | 清理上游 merge 残留冲突标记 |
+| `8262de5` | remove stray conflict closing marker | ChatWindow 残留冲突标记清理 |
+| `59995c9` | add missing getAssistantErrorMessage | 补回上游 v0.8.3 API |
+| `22cf9f0` | fix(ui): ModelsConfig responsive on mobile | 模型配置响应式修复 |
+| `c4004d6` | fix(ui): sidebar toolbar icon button widths | 工具栏图标等宽 |
+
+### 28.2 SessionSidebar 变化
+| 变化 | 说明 |
+|------|------|
+| **删除** `favoritesPanelOpen` state | 收藏面板不再可折叠 |
+| **删除** 折叠的 Favorites 面板 | 改为 flat tab（与 Sessions 平级） |
+| **新增** `sidebarTab` state | `"sessions" | "favorites"` 切换 |
+| **保留** favorite toggle + 删除确认 | 核心功能不变 |
+
+### 28.3 AppShell 变化
+| 变化 | 说明 |
+|------|------|
+| **新增** `ShortcutsPanel` 集成 | `useState` + `setShortcutsPanelOpener` |
+| **修改** 底部 toolbar 布局 | `flex` → `grid` with `subgrid span 2` |
+| **保留** `<OpenClawIntegration />` | 集成点不变 |
+
+### 28.4 安全变更
+| Commit | 说明 |
+|--------|------|
+| `f6d0737` | fix(security): support wildcard hostnames in API request security | 请求安全检查支持 `*.domain` 格式 |
+| `4e3f1af` | fix(security): normalizeConfiguredHostname must handle wildcard before URL parsing | 修复 wildcard 解析顺序 |
+| `f2ca92d` | chore: remove Host header validation | DNS 重绑定保护简化为只检查 Origin |
+| `a1063fc` | chore: remove Origin/Sec-Fetch-Site validation too | 移除部分安全 header 检查 |
+
+---
+
+## 文档版本信息
+
+| 版本 | 基准 commit | 内容覆盖范围 | 行数 |
+|------|-------------|-------------|------|
+| v1.0 (初版) | `f152945` | 基础自定义功能清单 | ~800 |
+| v1.1 (完整) | `f152945` | 接口契约 + CSS 清单 + 测试策略 + 全局变量 | 1362 |
+| v1.2 (更新) | HEAD (`59995c9`) | +PWA + 模型发现 + 上游 v0.8.3/0.8.4 合并变更 | ~1430 |
+
+> **最后更新**: 2026-08-01 | 覆盖到 HEAD (`59995c9`) | 总行数: 待统计

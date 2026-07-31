@@ -29,7 +29,11 @@ import { ScheduledTasksConfig } from "./ScheduledTasksConfig";
 import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
 import { useNotify } from "@/hooks/useNotify";
 
-export function OpenClawIntegration() {
+interface Props {
+  providerId: string | null;
+}
+
+export function OpenClawIntegration({ providerId }: Props) {
   // §1.2 Self-contained: all state lives here, not in AppShell
   const [notifyConfigOpen, setNotifyConfigOpen] = useState(false);
   const [tasksConfigOpen, setTasksConfigOpen] = useState(false);
@@ -102,10 +106,8 @@ export function OpenClawIntegration() {
         : createPortal(toolbarButtons, document.body)
       }
 
-      {/* Token quota bar — see OPENCLAW-INTEGRATION.md §9 TODO about
-          enabled={true} being hardcoded. Once ChatWindow re-exposes the
-          provider callback we can replace this with a derived value. */}
-      <MinimaxTokenPlanBar enabled={true} />
+      {/* Token quota bar — driven by providerId from AppShell via ChatWindow.onSelectedModelChange */}
+      <MinimaxTokenPlanBar enabled={providerId === "minimax-cn"} />
 
       {/* Modals */}
       {notifyConfigOpen && (
