@@ -10,6 +10,7 @@ import { toggleShortcutsPanel } from "./ShortcutsPanel";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { autoResumeStore, useAllAutoResumeSchedules, type Stored as AutoResumeSchedule } from "@/lib/auto-resume-store";
 
+
 declare global {
   interface Window {
     piDesktop?: {
@@ -98,6 +99,7 @@ interface Props {
   /** Whether the reset action is currently allowed (no session / streaming
    *  / already at root all turn this off). */
   canResetContext?: boolean;
+
 }
 
 interface WorktreeEntry {
@@ -295,6 +297,7 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
       cur = parentOf.get(cur);
     }
     ancestorCache.set(id, null);
+
     return null;
   }
 
@@ -409,6 +412,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const { t } = useI18n();
   const { isDark, toggleTheme } = useTheme();
   const isMobile = useIsMobile();
+
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -427,6 +431,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Reverts on outside click or after 5s of inactivity.
   const [resetPhase, setResetPhase] = useState<"idle" | "confirming">("idle");
   const resetToolbarRef = useRef<HTMLDivElement>(null);
+
   // Worktree switcher state
   const [worktreeState, setWorktreeState] = useState<WorktreeState | null>(null);
   const [wtDropdownOpen, setWtDropdownOpen] = useState(false);
@@ -451,6 +456,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [favoriteSessionIds, setFavoriteSessionIds] = useState<Set<string>>(() => new Set());
   const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<"sessions" | "favorites">("sessions");
+
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
@@ -469,6 +475,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       // Favorites are server-owned; the API response is the source of truth
       // so any stale optimistic update gets re-aligned here.
       setFavoriteSessionIds(new Set(data.favoriteSessionIds ?? []));
+
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
       if (!sseAuthoritativeRef.current) {
@@ -477,6 +484,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       // Favorites are server-owned — the API response is the source of truth,
       // so a stale local optimistic update gets re-aligned here.
       setFavoriteSessionIds(new Set(data.favoriteSessionIds ?? []));
+
       // Drop unread markers for sessions that no longer exist (e.g. deleted).
       const existingIds = new Set(data.sessions.map((s) => s.id));
       setUnreadSessionIds((prev) => {
@@ -595,6 +603,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       setFavoriteSessionIds(prev);
     }
   }, [favoriteSessionIds]);
+
 
   const restoredRef = useRef(false);
 
@@ -843,6 +852,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
   }, [canResetContext, resetPhase]);
 
+
   // Clicking a session moves the effective cwd to that session's worktree.
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
@@ -898,6 +908,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // render the same session twice).
   const allSchedules = useAllAutoResumeSchedules();
   const waitingSchedules = allSchedules.filter((s) => !runningSessionIds.has(s.sessionId));
+
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -926,6 +937,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
            title: t("sidebar.checkingWorktrees"),
         }
       : null);
+
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1833,6 +1845,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       {/* Session list */}
       {sidebarTab === "sessions" && (
       <div style={{ flex: (explorerOpen && (selectedCwdProp || selectedCwd)) || (runningPanelOpen && (runningSessions.length > 0 || waitingSchedules.length > 0)) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.loading")}
@@ -1900,6 +1913,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           </div>
         )}
 
+
         {sessionTree.map((node) => (
           <SessionTreeItem
             key={node.session.id}
@@ -1908,6 +1922,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             runningSessionIds={runningSessionIds}
             unreadSessionIds={unreadSessionIds}
             favoriteSessionIds={favoriteSessionIds}
+
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
             onSessionDeleted={(id) => {
@@ -1915,6 +1930,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               loadSessions();
             }}
             onToggleFavorite={handleToggleFavorite}
+
             depth={0}
           />
         ))}
@@ -2011,6 +2027,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         </div>
       )}
 
+
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
         <div
@@ -2104,6 +2121,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               }}
               onMouseEnter={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
               onMouseLeave={(e) => { if (explorerRefreshDone) return; e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
+
             >
               {explorerRefreshDone ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2117,6 +2135,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               )}
 </button>
             </span>
+
           </div>
           {explorerOpen && (
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
@@ -2226,6 +2245,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           </button>
         </span>
       </div>
+
     </div>
   );
 }
@@ -2240,6 +2260,7 @@ function SessionTreeItem({
   onRenamed,
   onSessionDeleted,
   onToggleFavorite,
+
   depth,
 }: {
   node: SessionTreeNode;
@@ -2251,6 +2272,7 @@ function SessionTreeItem({
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
   onToggleFavorite?: (id: string, next: boolean) => void;
+
   depth: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -2280,6 +2302,7 @@ function SessionTreeItem({
           onRenamed={onRenamed}
           onDeleted={(id) => onSessionDeleted?.(id)}
           onToggleFavorite={onToggleFavorite}
+
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
@@ -2297,6 +2320,7 @@ function SessionTreeItem({
               unreadSessionIds={unreadSessionIds}
               favoriteSessionIds={favoriteSessionIds}
               onToggleFavorite={onToggleFavorite}
+
               onSelectSession={onSelectSession}
               onRenamed={onRenamed}
               onSessionDeleted={onSessionDeleted}
@@ -2368,6 +2392,7 @@ function FavoriteIndicator() {
     </span>
   );
 }
+
 
 function UnreadSessionIndicator() {
   const { t } = useI18n();
@@ -2531,6 +2556,7 @@ function WaitingSessionItem({
   );
 }
 
+
 function SessionItem({
   session,
   isSelected,
@@ -2541,6 +2567,7 @@ function SessionItem({
   onRenamed,
   onDeleted,
   onToggleFavorite,
+
   depth = 0,
   hasChildren = false,
   collapsed = false,
@@ -2555,6 +2582,7 @@ function SessionItem({
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
   onToggleFavorite?: (id: string, next: boolean) => void;
+
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -2669,6 +2697,7 @@ function SessionItem({
                 )}
               </>
             )}
+
           </div>
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
             <button
@@ -2689,6 +2718,7 @@ function SessionItem({
                 <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
               </svg>
 {isFavorite ? "Delete anyway" : t("sidebar.delete")}
+
             </button>
             <button
               onClick={handleDeleteCancel}
@@ -2769,6 +2799,7 @@ title={
                 {title}
               </span>
               {isFavorite && <FavoriteIndicator />}
+
             </div>
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
               {isRunning ? (
@@ -2852,6 +2883,7 @@ title={
                 </svg>
               </button>
               <button
+
                 onClick={startRename}
                 title={t("sidebar.rename")}
                 style={{

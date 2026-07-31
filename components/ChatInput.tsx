@@ -38,7 +38,7 @@ interface Props {
   onFollowUp?: (message: string, images?: AttachedImage[]) => void;
   onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
   isStreaming: boolean;
-  sessionId?: string;
+sessionId?: string;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   modelNames?: Record<string, string>;
@@ -276,7 +276,7 @@ retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
 }: Props, ref) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
-  const { keyboardHeight } = useVisualViewport();
+const { keyboardHeight } = useVisualViewport();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -329,7 +329,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+const cameraInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -1065,7 +1065,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
         background: "transparent",
         padding: "0 16px 8px",
         paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
-        transform: keyboardHeight > 0 ? `translateY(-${keyboardHeight}px)` : undefined,
+transform: keyboardHeight > 0 ? `translateY(-${keyboardHeight}px)` : undefined,
         transition: "transform 0.15s ease",
       }}
     >
@@ -1083,7 +1083,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
           e.target.value = "";
         }}
       />
-      {/* Hidden file input — direct camera capture (mobile only) */}
+{/* Hidden file input — direct camera capture (mobile only) */}
       {isMobile && (
         <input
           ref={cameraInputRef}
@@ -1169,7 +1169,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
             ))}
           </div>
         )}
-        {/* Quota auto-resume countdown banner */}
+{/* Quota auto-resume countdown banner */}
         {schedule && resumeCountdownText && (
           <div style={{
             marginBottom: 8, padding: "5px 10px",
@@ -1223,6 +1223,26 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
               <polyline points="20 6 9 17 4 12" />
             </svg>
             {compactResultText}
+          </div>
+        )}
+{compactError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: 8,
+              padding: "7px 10px",
+              background: "rgba(239,68,68,0.07)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              borderRadius: 6,
+              color: "#ef4444",
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              lineHeight: 1.5,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {compactError}
           </div>
         )}
         {/* Image previews */}
@@ -1762,7 +1782,7 @@ title={t("chat.attachImage")}
                 <polyline points="21 15 16 10 5 21" />
               </svg>
             </button>
-            {isMobile && (
+{isMobile && (
               <button
                 onClick={() => cameraInputRef.current?.click()}
                 disabled={isStreaming}
@@ -2197,7 +2217,7 @@ title={t("chat.attachImage")}
             )}
 
             {!isStreaming && onCompact && (
-              <div style={{ position: "relative" }}>
+<div style={{ position: "relative" }}>
                 {compactError && (
                   <div style={{
                     position: "absolute", bottom: "calc(100% + 6px)", right: 0,

@@ -12,7 +12,10 @@ import {
 } from "@/lib/session-reader";
 import { sessionPathKey } from "@/lib/session-path";
 import { getRpcSession } from "@/lib/rpc-manager";
+<<<<<<< HEAD
 import { dropFavoritesFor } from "@/lib/favorites-store";
+=======
+>>>>>>> upstream/main
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
@@ -242,9 +245,12 @@ export async function DELETE(
     unlinkSync(filePath);
     invalidateSessionPathCache(id);
     invalidateSessionListCache();
+<<<<<<< HEAD
     // Drop the deleted id from the favorites set so we don't leave dangling
     // markers pointing at a session file that no longer exists.
     await dropFavoritesFor([id]);
+=======
+>>>>>>> upstream/main
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
