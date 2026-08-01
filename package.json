@@ -1,6 +1,6 @@
 {
   "name": "@agegr/pi-web",
-  "version": "0.8.2",
+  "version": "0.8.6",
   "description": "Web UI for the pi coding agent",
   "homepage": "https://github.com/agegr/pi-web#readme",
   "repository": {
@@ -47,6 +47,7 @@
     "next": "16.2.12",
     "node-pty": "^1.1.0",
     "nodemailer": "^9.0.3",
+    "proper-lockfile": "4.1.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "undici": "8.5.0"
@@ -56,6 +57,7 @@
     "@tailwindcss/postcss": "^4.2.2",
     "@types/node": "^25",
     "@types/nodemailer": "^6.4.17",
+    "@types/proper-lockfile": "4.1.4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/react-syntax-highlighter": "^15.5.13",
