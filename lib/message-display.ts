@@ -8,19 +8,19 @@ export function isEmptyThinkingBlock(block: AssistantContentBlock, options: Disp
   return block.type === "thinking" && !block.deferred && !options.isStreaming && block.thinking.trim() === "";
 }
 
-export function getDisplayableAssistantBlocks(
-  message: AssistantMessage,
-  options: DisplayOptions = {},
-): AssistantContentBlock[] {
-  return (message.content ?? []).filter((block) => !isEmptyThinkingBlock(block, options));
-}
-
 export function getAssistantErrorMessage(
   message: AssistantMessage,
   options: DisplayOptions = {},
 ): string | null {
   if (options.isStreaming || message.stopReason !== "error") return null;
   return message.errorMessage?.trim() || "Unknown provider error";
+}
+
+export function getDisplayableAssistantBlocks(
+  message: AssistantMessage,
+  options: DisplayOptions = {},
+): AssistantContentBlock[] {
+  return (message.content ?? []).filter((block) => !isEmptyThinkingBlock(block, options));
 }
 
 function isFinalAnswerBlock(block: AssistantContentBlock): boolean {

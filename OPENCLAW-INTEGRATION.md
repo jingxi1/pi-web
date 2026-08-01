@@ -215,13 +215,13 @@ AppShell 在 toolbar 里预留一个 `<div id="openclaw-toolbar-slot" />`，Open
 |------|-----------|----------|-------------|------|
 | 收藏会话 | `SessionSidebar.tsx` 内嵌 | `/api/sessions/favorites` | `f461c60` | ✅ |
 | 收藏 UI 渲染（金 ⭐）| `SessionSidebar.tsx` 内嵌 | — | `c515490` | ✅ |
-| 通知系统 | `NotifyConfig.tsx` | `/api/notify` `/dispatch` `/test` | pre-merge | ⚠️ inline |
-| 定时任务 | `ScheduledTasksConfig.tsx` | `/api/scheduled-tasks` | pre-merge | ⚠️ inline |
-| Token 配额 | `MinimaxTokenPlanBar.tsx` | `/api/token-plan/[provider]` | pre-merge | ⚠️ inline |
+| 通知系统 | `NotifyConfig.tsx` | `/api/notify` `/dispatch` `/test` | pre-merge | ✅ |
+| 定时任务 | `ScheduledTasksConfig.tsx` | `/api/scheduled-tasks` | pre-merge | ✅ |
+| Token 配额 | `MinimaxTokenPlanBar.tsx` | `/api/token-plan/[provider]` | pre-merge | ✅ |
 | Node-pty 诊断 | — | `/api/diag/node-pty` | pre-merge | ✅ |
 | 终端命令 runner | — | `/api/terminal/command` | pre-merge | ✅ |
 
-**未模块化**（标 ⚠️ 的）目前还散落在 `AppShell.tsx` 里。下次升级前必须按 §3 / §4 改完。
+**状态说明**：NotifyConfig、ScheduledTasksConfig、MinimaxTokenPlanBar 已抽入 `OpenClawIntegration` 组件内渲染，通过 `createPortal` 注入 toolbar slot，AppShell 不再直接引用这些组件。
 
 ---
 
@@ -331,10 +331,12 @@ review 一个涉及 OpenClaw 的 PR 时：
 
 ## 9. 已知限制 / 待办
 
-- [ ] OpenClaw 特性仍然 inline 在 AppShell.tsx 里（commit f34273e），**还没**按本文档模块化。下次 merge 之前必须做完。
-- [ ] OpenClawIntegration 还没创建文件 —— 需要从 f34273e 提交里把那 36 行抽出来
-- [ ] AppShell 的 toolbar slot（方案 B）还没创建 —— 需要在 toolbar 里加个 `<div id="openclaw-toolbar-slot" />`
-- [ ] TokenPlanBar 硬编码 `enabled={true}` —— 需要 ChatWindow 暴露 provider callback
+- [x] OpenClaw 特性从 AppShell 抽离 → ✅ 已完成（`openclaw-integration.tsx`）
+- [x] OpenClawIntegration 文件创建 → ✅ 已完成
+- [x] AppShell 的 toolbar slot（方案 B）→ ✅ 已完成（`id="openclaw-toolbar-slot"`）
+- [x] TokenPlanBar 驱动 providerId → ✅ 已完成（`providerId` prop 从 AppShell 传入）
+- [ ] 组件文件移至 `components/openclaw/` 子目录 → 可选优化（当前组件在 `components/` 根目录，不影响 AppShell 集成）
+- [ ] 更新 `custom-features.md` §5 功能清单表格（记录新 commit）
 
 ---
 
@@ -343,4 +345,4 @@ review 一个涉及 OpenClaw 的 PR 时：
 | 日期 | 变更 | 原因 |
 |------|------|------|
 | 2026-07-29 | 创建本文档 | v0.7→0.8 升级痛点驱动 |
-| _待_ | 模块化改造（OpenClawIntegration 抽文件） | 见 §9 TODO |
+| 2026-08-01 | §9 TODO 全部完成（抽离到 openclaw-integration.tsx） | AppShell 升级不再丢 OpenClaw 代码 |

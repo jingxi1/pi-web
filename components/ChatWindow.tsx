@@ -5,6 +5,7 @@ import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecuti
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
 import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
+
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
@@ -179,6 +180,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   const isMobile = useIsMobile();
   const breakpoint = useBreakpoint();
 
+
   // Wrap onAgentEnd to play the completion sound. This is more reliable than
   // wrapping handleAgentEventRef because useAgentSession overwrites that ref
   // on every render (it syncs the latest callback), which would blow away an
@@ -318,6 +320,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   }, [selectedModelId, selectedProviderId, onSelectedModelChange]);
   useEffect(() => () => { onSelectedModelChange?.("", ""); }, [onSelectedModelChange]);
 
+
   const onDrop = useCallback((files: File[]) => {
     if (sessionBusy) return;
     chatInputRef?.current?.addImages(files);
@@ -366,6 +369,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
       sessionId={session?.id ?? sessionIdRef.current ?? undefined}
+
       modelNames={modelNames}
       modelList={modelList}
       modelError={modelError}
@@ -493,10 +497,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  PiWeb <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PIWEB_VERSION ?? "0.0.0"}</span>
-                </span>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  PiTools <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PI_TOOLS_VERSION ?? "0.0.0"}</span>
+                  web <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}</span>
                 </span>
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                   pi <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}</span>
@@ -659,7 +660,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                 const finalProcessMessage = finalSplit.processBlocks.length > 0
                   ? withAssistantBlocks(finalAssistant, finalSplit.processBlocks, { omitUsage: true })
                   : null;
-                const finalAnswerMessage = finalSplit.answerBlocks.length > 0 || getAssistantErrorMessage(finalAssistant)
+                              const finalAnswerMessage = finalSplit.answerBlocks.length > 0 || getAssistantErrorMessage(finalAssistant)
                   ? withAssistantBlocks(finalAssistant, finalSplit.answerBlocks)
                   : null;
 
@@ -761,6 +762,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
             messageRefs={messageRefs}
           />
         ) : null}
+
       </div>
 
       <div className="relative">
@@ -768,6 +770,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
           style={{
             padding: `0 ${CHAT_COLUMN_PADDING}px`,
             paddingRight: breakpoint === "mobile" ? CHAT_COLUMN_PADDING : breakpoint === "tablet" ? 36 : CHAT_INPUT_RIGHT_PADDING,
+
           }}
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
@@ -993,6 +996,7 @@ function ExtensionDialog({
               style={{
                 width: "100%",
                 minHeight: "clamp(140px, 30vh, 220px)",
+
                 padding: 10,
                 borderRadius: 7,
                 border: "1px solid var(--border)",

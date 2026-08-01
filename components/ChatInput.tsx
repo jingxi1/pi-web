@@ -39,7 +39,7 @@ interface Props {
   onFollowUp?: (message: string, images?: AttachedImage[]) => void;
   onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
   isStreaming: boolean;
-  sessionId?: string;
+sessionId?: string;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   modelNames?: Record<string, string>;
@@ -330,7 +330,7 @@ retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
 }: Props, ref) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
-  const { keyboardHeight } = useVisualViewport();
+const { keyboardHeight } = useVisualViewport();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -390,7 +390,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+const cameraInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -1144,8 +1144,9 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
         flexShrink: 0,
         background: "transparent",
         padding: "0 16px 8px",
-        paddingRight: isMobile ? 16 : 52,
-        paddingBottom: keyboardHeight > 0 ? keyboardHeight : "max(0px, env(safe-area-inset-bottom, 0px))",
+        paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
+transform: keyboardHeight > 0 ? `translateY(-${keyboardHeight}px)` : undefined,
+        transition: "transform 0.15s ease",
       }}
     >
       {/* Hidden file input — gallery picker */}
@@ -1162,7 +1163,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
           e.target.value = "";
         }}
       />
-      {/* Hidden file input — direct camera capture (mobile only) */}
+{/* Hidden file input — direct camera capture (mobile only) */}
       {isMobile && (
         <input
           ref={cameraInputRef}
@@ -1249,7 +1250,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
             ))}
           </div>
         )}
-        {/* Quota auto-resume countdown banner */}
+{/* Quota auto-resume countdown banner */}
         {schedule && resumeCountdownText && (
           <div style={{
             marginBottom: 8, padding: "5px 10px",
@@ -1305,7 +1306,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
             {compactResultText}
           </div>
         )}
-        {compactError && (
+{compactError && (
           <div
             role="alert"
             style={{
@@ -1880,7 +1881,7 @@ title={t("chat.attachImage")}
                 <polyline points="21 15 16 10 5 21" />
               </svg>
             </button>
-            {isMobile && (
+{isMobile && (
               <button
                 onClick={() => cameraInputRef.current?.click()}
                 disabled={isStreaming}
@@ -2315,7 +2316,18 @@ title={t("chat.attachImage")}
             )}
 
             {!isStreaming && onCompact && (
-              <div>
+<div style={{ position: "relative" }}>
+                {compactError && (
+                  <div style={{
+                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                    background: "#1f2937", color: "#f87171",
+                    fontSize: 11, padding: "4px 8px", borderRadius: 5,
+                    whiteSpace: "nowrap", pointerEvents: "none",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.2)", zIndex: 50,
+                  }}>
+                    {compactError}
+                  </div>
+                )}
                 <button
                   onClick={isCompacting ? onAbortCompaction : onCompact}
                   disabled={isStreaming && !isCompacting}

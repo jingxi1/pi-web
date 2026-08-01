@@ -97,3 +97,4 @@ test("renders compact errors above the input as a wrapping alert", () => {
   assert.match(html, /white-space:pre-wrap/);
   assert.ok(html.indexOf('role="alert"') < html.indexOf("<textarea"));
 });
+

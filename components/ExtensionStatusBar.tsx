@@ -36,7 +36,7 @@ export function ExtensionStatusBar({ statuses }: { statuses: ExtensionStatusItem
         height: 36,
         padding: "0 12px",
         borderTop: "1px solid var(--border)",
-        background: "transparent",
+        background: "var(--bg-panel)",
       }}
     >
       <span
