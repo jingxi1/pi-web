@@ -385,6 +385,7 @@ const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const modelDropdownPanelRef = useRef<HTMLDivElement>(null);
+  const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const toolDropdownRef = useRef<HTMLDivElement>(null);
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
@@ -1135,6 +1136,31 @@ const cameraInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
+
+  // Keep model dropdown anchored to the trigger button when the mobile
+  // keyboard opens/closes (visualViewport.height shrinks/grows). Without
+  // this the `bottom` value (computed from a rect captured at click time)
+  // goes negative and the panel slides off the bottom of the screen.
+  useEffect(() => {
+    if (!modelDropdownOpen) return;
+    const update = () => {
+      const btn = modelButtonRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      setModelDropdownRect({ top: rect.top, left: rect.left, width: rect.width });
+    };
+    update();
+    window.addEventListener("resize", update);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", update);
+    }
+    return () => {
+      window.removeEventListener("resize", update);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener("resize", update);
+      }
+    };
+  }, [modelDropdownOpen]);
 
 
 
@@ -1917,6 +1943,7 @@ title={t("chat.attachImage")}
             {(modelOptions.length > 0 || currentName || modelError) && onModelChange && (
                 <div ref={dropdownRef} style={{ position: "relative", flex: isMobile ? "1 1 auto" : undefined, minWidth: 0 }}>
                   <button
+                    ref={modelButtonRef}
                     onClick={(e) => {
                       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                       setModelDropdownRect({ top: rect.top, left: rect.left, width: rect.width });
@@ -1997,7 +2024,7 @@ title={t("chat.attachImage")}
                             }}
                             placeholder={t("chat.filterModels")}
                             aria-label={t("chat.filterModels")}
-                            autoFocus
+                            autoFocus={!isMobile}
                             autoComplete="off"
                             spellCheck={false}
                             style={{
