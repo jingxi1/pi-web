@@ -26,13 +26,16 @@ function isLoopbackHostname(hostname: string): boolean {
 
 /**
  * Built-in trusted host patterns applied to every deployment. Use these for
- * fork-wide defaults that should not require per-machine env overrides. Each
- * entry supports an optional `*.` wildcard that matches any non-empty
- * subdomain label (single- or multi-level, e.g. `*.appvmm.fnos.net` matches
- * both `foo.appvmm.fnos.net` and `a.b.appvmm.fnos.net`).
+ * fork-wide defaults that should not require per-machine env overrides.
+ *
+ * Supported pattern syntaxes (see `matchesHostPattern` for details):
+ * - `example.com`     — exact match (apex only)
+ * - `*.example.com`   — any non-empty subdomain (multi-level OK), not the apex
+ * - `.example.com`    — apex AND any subdomain (Pi-hole/NextDNS/AdGuard style)
  */
 const DEFAULT_ALLOWED_HOST_PATTERNS: readonly string[] = [
   "*.appvmm.fnos.net",
+  ".home977.fnos.net",
 ];
 
 /**
@@ -40,16 +43,25 @@ const DEFAULT_ALLOWED_HOST_PATTERNS: readonly string[] = [
  *
  * - `*.example.com` matches any subdomain of `example.com` (multi-level OK),
  *   but not the bare apex `example.com`.
+ * - `.example.com` matches the apex AND any subdomain. This is the
+ *   Pi-hole/NextDNS/AdGuard convention for "this domain and everything
+ *   under it" and is the most common allowlist shape for whole-home
+ *   Tailscale-style hostnames like `.home977.fnos.net`.
  * - Any other pattern is compared as an exact (case-insensitive) match.
  *
  * Patterns are intentionally not run through `hostnameFromAuthority`/`URL`
- * parsing: the leading `*` is not a valid hostname character in URI syntax,
+ * parsing: the leading `*` and `.` are not valid URI hostname characters,
  * so URL-based normalization would either reject the pattern or rewrite it.
  */
 function matchesHostPattern(hostname: string, pattern: string): boolean {
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(1); // ".example.com"
     return hostname.endsWith(suffix) && hostname.length > suffix.length;
+  }
+  if (pattern.startsWith(".") && pattern.length > 1) {
+    const suffix = pattern; // ".example.com"
+    return hostname === suffix.slice(1) || // apex
+      (hostname.endsWith(suffix) && hostname.length > suffix.length);
   }
   return hostname === pattern;
 }
