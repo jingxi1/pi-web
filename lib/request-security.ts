@@ -37,6 +37,7 @@ const DEFAULT_ALLOWED_HOST_PATTERNS: readonly string[] = [
   "*.appvmm.fnos.net",
   ".home977.fnos.net",
   ".fnos.net",
+  ".5ddd.com",
 ];
 
 /**
