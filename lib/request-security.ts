@@ -83,9 +83,22 @@ function canonicalOrigin(value: string): string | null {
 }
 
 function getRequestOrigin(request: Request): string | null {
-  const requestUrl = new URL(request.url);
   const host = request.headers.get("host");
-  return host ? canonicalOrigin(`${requestUrl.protocol}//${host}`) : null;
+  if (!host) return null;
+  const requestUrl = new URL(request.url);
+  // Trust the X-Forwarded-Proto header from upstream reverse proxies so
+  // origin checks still match when the user accessed the app over HTTPS but
+  // pi-tools itself runs on plain HTTP behind the proxy. nginx already sets
+  // `proxy_set_header X-Forwarded-Proto $scheme;` by convention; we honor
+  // the leftmost value (the original client) since X-Forwarded-* is a
+  // comma-separated chain when multiple proxies are in front. Do NOT expose
+  // this app directly to untrusted clients without a proxy stripping the
+  // header, since it can be spoofed.
+  const forwardedProto = request.headers.get("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim();
+  const proto = forwardedProto || requestUrl.protocol.replace(/:$/, "");
+  return canonicalOrigin(`${proto}://${host}`);
 }
 
 function isUserInitiatedSessionExportNavigation(request: Request): boolean {
