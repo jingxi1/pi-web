@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { SkillsResponse } from "@/lib/api-types";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
@@ -1106,9 +1107,13 @@ const cameraInputRef = useRef<HTMLInputElement>(null);
   })();
   const toolPresetLabel = Object.entries(TOOL_PRESET_MAP).find(([, v]) => v === (toolPreset ?? "default"))?.[0] ?? "default";
 
-  // Close dropdowns on outside click
+  // Close dropdowns on outside click.
+  // Use `pointerdown` (fires for both mouse and touch) instead of `mousedown`
+  // because the latter is a synthetic follow-up to touchend on mobile and can
+  // fire AFTER the option button's `click`, racing with the selection handler
+  // and dropping the tap.
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       if (
         dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
         modelDropdownPanelRef.current && !modelDropdownPanelRef.current.contains(e.target as Node)
@@ -1129,18 +1134,43 @@ const cameraInputRef = useRef<HTMLInputElement>(null);
         setHistoryMenuOpen(false);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
   }, []);
+
+  // Portal target for the model dropdown panel. The chat-input wrapper applies
+  // `transform: translateY(-keyboardHeight)` when the mobile keyboard opens,
+  // and any `transform` on an ancestor establishes a new containing block for
+  // `position: fixed` descendants — so a panel rendered inside the wrapper is
+  // anchored to the wrapper, not the viewport, and ends up mispositioned (the
+  // original "panel drifts off-screen" symptom). Portalling to <body> lifts the
+  // panel out of that context so `position: fixed` always means the viewport.
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setPortalTarget(document.body);
+  }, []);
+
+  // Lock background scroll while the model picker is open on mobile. Without
+  // this, scrolling the picker list also scrolls the underlying chat,
+  // making selection feel jumpy and often missing the tap target.
+  useEffect(() => {
+    if (!modelDropdownOpen || !isMobile) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [modelDropdownOpen, isMobile]);
 
   useEffect(() => {
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
 
-  // Keep model dropdown anchored to the trigger button when the mobile
-  // keyboard opens/closes (visualViewport.height shrinks/grows). Without
-  // this the `bottom` value (computed from a rect captured at click time)
-  // goes negative and the panel slides off the bottom of the screen.
+  // Keep model dropdown anchored to the trigger button on desktop when the
+  // window resizes while the picker is open. Mobile uses a portal'd
+  // bottom-sheet anchored to viewport bottom, so it ignores modelDropdownRect
+  // entirely — the listener still runs (no-op on mobile) so desktop keeps
+  // working without a separate code path.
   useEffect(() => {
     if (!modelDropdownOpen) return;
     const update = () => {
@@ -1993,109 +2023,157 @@ title={t("chat.attachImage")}
                       {currentName ?? (modelOptions.length > 0 ? "Select model" : "No models")}
                     </span>
                   </button>
-                  {modelDropdownOpen && modelDropdownRect && (() => {
+                  {modelDropdownOpen && modelDropdownRect && portalTarget && createPortal((() => {
                     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-                    const bottom = viewportHeight - modelDropdownRect.top + 6;
-                    const maxH = Math.max(120, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.6));
-                    // On mobile, pin to a small left margin and cap width to the
-                    // viewport so long model names never push the panel off-screen.
-                    const panelPos: React.CSSProperties = isMobile
-                      ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
-                      : { left: modelDropdownRect.left, width: "max-content", minWidth: modelDropdownRect.width };
+                    // Mobile uses a true bottom-sheet anchored to the viewport
+                    // bottom (no trigger rect needed, immune to keyboard
+                    // transforms). Desktop still floats above the trigger
+                    // button using the captured rect.
+                    const panelStyle: React.CSSProperties = isMobile
+                      ? {
+                          position: "fixed",
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          maxHeight: "70vh",
+                          borderRadius: "12px 12px 0 0",
+                          border: "1px solid var(--border)",
+                          borderBottom: "none",
+                          boxShadow: "0 -4px 24px rgba(0,0,0,0.18)",
+                          zIndex: 1000,
+                          background: "var(--bg)",
+                          overflow: "hidden",
+                          display: "flex",
+                          flexDirection: "column",
+                        }
+                      : {
+                          position: "fixed",
+                          bottom: viewportHeight - modelDropdownRect.top + 6,
+                          left: modelDropdownRect.left,
+                          width: "max-content",
+                          minWidth: modelDropdownRect.width,
+                          maxHeight: Math.max(120, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.6)),
+                          border: "1px solid var(--border)",
+                          borderRadius: 8,
+                          boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
+                          zIndex: 500,
+                          background: "var(--bg)",
+                          overflow: "hidden",
+                          display: "flex",
+                          flexDirection: "column",
+                        };
                     return (
-                      <div ref={modelDropdownPanelRef} style={{
-                      position: "fixed",
-                      bottom,
-                      ...panelPos,
-                      zIndex: 500, background: "var(--bg)", border: "1px solid var(--border)",
-                      borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                      overflow: "hidden", maxHeight: maxH, display: "flex", flexDirection: "column",
-                      }}>
-                      {showModelFilter && (
-                        <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-                          <input
-                            value={modelFilter}
-                            onChange={(e) => setModelFilter(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Escape") {
-                                setModelFilter("");
-                                setModelDropdownOpen(false);
-                              }
+                      <>
+                        {isMobile && (
+                          <div
+                            aria-hidden="true"
+                            data-testid="model-dropdown-backdrop"
+                            onClick={() => {
+                              setModelDropdownOpen(false);
+                              setModelFilter("");
                             }}
-                            placeholder={t("chat.filterModels")}
-                            aria-label={t("chat.filterModels")}
-                            autoFocus={!isMobile}
-                            autoComplete="off"
-                            spellCheck={false}
                             style={{
-                              width: "100%",
-                              minWidth: isMobile ? 0 : 220,
-                              fontSize: 11,
-                              fontFamily: "var(--font-mono)",
-                              padding: "5px 8px",
-                              border: "1px solid var(--border)",
-                              borderRadius: 5,
-                              outline: "none",
-                              background: "var(--bg)",
-                              color: "var(--text)",
-                              boxSizing: "border-box",
+                              position: "fixed",
+                              inset: 0,
+                              zIndex: 999,
+                              background: "rgba(0,0,0,0.4)",
+                              touchAction: "manipulation",
                             }}
                           />
-                        </div>
-                      )}
-                      <div style={{ minHeight: 0, overflowY: "auto" }}>
-                        {modelsByProvider.length === 0 ? (
-                          <div style={{ padding: "8px 12px", color: "var(--text-dim)", fontSize: 12, whiteSpace: "nowrap" }}>
-                            {modelFilter.trim() ? t("chat.noMatchingModels") : "No available models"}
-                          </div>
-                        ) : modelsByProvider.map((group, gi) => (
-                          <div key={group.provider}>
-                            {(modelsByProvider.length > 1) && (
-                              <div style={{
-                                padding: "6px 12px 4px",
-                                fontSize: 10, fontWeight: 600, color: "var(--text-dim)",
-                                textTransform: "uppercase", letterSpacing: "0.07em",
-                                borderTop: gi > 0 ? "1px solid var(--border)" : "none",
-                              }}>
-                                {group.provider}
-                              </div>
-                            )}
-                            {group.options.map((opt) => {
-                              const isActive = opt.modelId === model?.modelId && opt.provider === model?.provider;
-                              return (
-                                <button
-                                  key={`${opt.provider}:${opt.modelId}`}
-                                  onClick={() => {
-                                    setModelDropdownOpen(false);
+                        )}
+                        <div ref={modelDropdownPanelRef} style={panelStyle}>
+                          {showModelFilter && (
+                            <div style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+                              <input
+                                value={modelFilter}
+                                onChange={(e) => setModelFilter(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Escape") {
                                     setModelFilter("");
-                                    if (!isActive || isAutoModelSelection) onModelChange(opt.provider, opt.modelId);
-                                  }}
-                                  style={{
-                                    display: "flex", alignItems: "center", gap: 8,
-                                    width: "100%", padding: "7px 12px",
-                                    background: isActive ? "var(--bg-selected)" : "none",
-                                    border: "none",
-                                    color: isActive ? "var(--text)" : "var(--text-muted)",
-                                    cursor: "pointer", fontSize: 12, textAlign: "left",
-                                    fontWeight: isActive ? 600 : 400,
-                                    whiteSpace: "nowrap",
-                                  }}
-                                  onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                                  onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
-                                >
-                                  {isActive
-                                    ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
-                                    : <span style={{ width: 10, flexShrink: 0 }} />}
-                                  {opt.name}
-                                </button>
-                              );
-                            })}
+                                    setModelDropdownOpen(false);
+                                  }
+                                }}
+                                placeholder={t("chat.filterModels")}
+                                aria-label={t("chat.filterModels")}
+                                autoFocus={!isMobile}
+                                autoComplete="off"
+                                spellCheck={false}
+                                style={{
+                                  width: "100%",
+                                  minWidth: isMobile ? 0 : 220,
+                                  fontSize: isMobile ? 14 : 11,
+                                  fontFamily: "var(--font-mono)",
+                                  padding: isMobile ? "10px 12px" : "5px 8px",
+                                  border: "1px solid var(--border)",
+                                  borderRadius: isMobile ? 8 : 5,
+                                  outline: "none",
+                                  background: "var(--bg)",
+                                  color: "var(--text)",
+                                  boxSizing: "border-box",
+                                }}
+                              />
+                            </div>
+                          )}
+                          <div style={{ minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+                            {modelsByProvider.length === 0 ? (
+                              <div style={{ padding: "8px 12px", color: "var(--text-dim)", fontSize: 12, whiteSpace: "nowrap" }}>
+                                {modelFilter.trim() ? t("chat.noMatchingModels") : "No available models"}
+                              </div>
+                            ) : modelsByProvider.map((group, gi) => (
+                              <div key={group.provider}>
+                                {(modelsByProvider.length > 1) && (
+                                  <div style={{
+                                    padding: isMobile ? "8px 14px 4px" : "6px 12px 4px",
+                                    fontSize: 10, fontWeight: 600, color: "var(--text-dim)",
+                                    textTransform: "uppercase", letterSpacing: "0.07em",
+                                    borderTop: gi > 0 ? "1px solid var(--border)" : "none",
+                                  }}>
+                                    {group.provider}
+                                  </div>
+                                )}
+                                {group.options.map((opt) => {
+                                  const isActive = opt.modelId === model?.modelId && opt.provider === model?.provider;
+                                  return (
+                                    <button
+                                      key={`${opt.provider}:${opt.modelId}`}
+                                      type="button"
+                                      onClick={() => {
+                                        setModelDropdownOpen(false);
+                                        setModelFilter("");
+                                        if (!isActive || isAutoModelSelection) onModelChange(opt.provider, opt.modelId);
+                                      }}
+                                      style={{
+                                        display: "flex", alignItems: "center", gap: 8,
+                                        width: "100%",
+                                        padding: isMobile ? "14px 14px" : "7px 12px",
+                                        minHeight: isMobile ? 44 : undefined,
+                                        background: isActive ? "var(--bg-selected)" : "none",
+                                        border: "none",
+                                        color: isActive ? "var(--text)" : "var(--text-muted)",
+                                        cursor: "pointer",
+                                        fontSize: isMobile ? 14 : 12,
+                                        textAlign: "left",
+                                        fontWeight: isActive ? 600 : 400,
+                                        whiteSpace: "nowrap",
+                                        touchAction: "manipulation",
+                                      }}
+                                      onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                                      onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
+                                    >
+                                      {isActive
+                                        ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
+                                        : <span style={{ width: 10, flexShrink: 0 }} />}
+                                      {opt.name}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                    </div>
+                        </div>
+                      </>
                     );
-                  })()}
+                  })(), portalTarget)}
                 </div>
             )}
           </div>
