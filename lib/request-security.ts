@@ -20,18 +20,43 @@ function hostnameFromAuthority(value: string): string | null {
   }
 }
 
-function normalizeConfiguredHostname(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  return isIP(trimmed) ? normalizeHostname(trimmed) : hostnameFromAuthority(trimmed);
-}
-
 function isLoopbackHostname(hostname: string): boolean {
   return hostname === "localhost" || hostname.endsWith(".localhost");
 }
 
+/**
+ * Built-in trusted host patterns applied to every deployment. Use these for
+ * fork-wide defaults that should not require per-machine env overrides. Each
+ * entry supports an optional `*.` wildcard that matches any non-empty
+ * subdomain label (single- or multi-level, e.g. `*.appvmm.fnos.net` matches
+ * both `foo.appvmm.fnos.net` and `a.b.appvmm.fnos.net`).
+ */
+const DEFAULT_ALLOWED_HOST_PATTERNS: readonly string[] = [
+  "*.appvmm.fnos.net",
+];
+
+/**
+ * Matches a request hostname against a configured host pattern.
+ *
+ * - `*.example.com` matches any subdomain of `example.com` (multi-level OK),
+ *   but not the bare apex `example.com`.
+ * - Any other pattern is compared as an exact (case-insensitive) match.
+ *
+ * Patterns are intentionally not run through `hostnameFromAuthority`/`URL`
+ * parsing: the leading `*` is not a valid hostname character in URI syntax,
+ * so URL-based normalization would either reject the pattern or rewrite it.
+ */
+function matchesHostPattern(hostname: string, pattern: string): boolean {
+  if (pattern.startsWith("*.")) {
+    const suffix = pattern.slice(1); // ".example.com"
+    return hostname.endsWith(suffix) && hostname.length > suffix.length;
+  }
+  return hostname === pattern;
+}
+
 function configuredHostnamesFromEnvironment(): string[] {
   return [
+    ...DEFAULT_ALLOWED_HOST_PATTERNS,
     process.env.PI_WEB_HOSTNAME,
     ...(process.env.PI_WEB_ALLOWED_HOSTS?.split(",") ?? []),
   ].filter((value): value is string => Boolean(value?.trim()));
@@ -82,9 +107,11 @@ export function isApiRequestHostAllowed(
   if (!hostname) return false;
   if (isLoopbackHostname(hostname) || isIP(hostname)) return true;
 
-  return configuredHostnames.some(
-    (configured) => normalizeConfiguredHostname(configured) === hostname,
-  );
+  return configuredHostnames.some((configured) => {
+    const trimmed = configured.trim();
+    if (!trimmed) return false;
+    return matchesHostPattern(hostname, trimmed);
+  });
 }
 
 /** Reject browser cross-site API requests while preserving non-browser clients. */
