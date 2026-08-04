@@ -7,21 +7,6 @@
 ---
 
 ## 目录
-17. [扩展 UI 解析器](#17-扩展-ui-解析器-extension-custom-ui-parser)
-18. [代码块复制反馈 + 微交互动画](#18-代码块复制反馈--微交互动画)
-19. [辅助工具与基础设施](#19-辅助工具与基础设施)
-20. [PWA 支持](#20-pwa-支持)
-21. [模型价格预设 & 上游发现](#21-模型价格预设--上游发现)
-22. [系统架构与数据流图](#22-系统架构与数据流图)
-23. [接口契约 (API Contract)](#23-接口契约-api-contract)
-24. [CSS 类名与 Keyframes 清单](#24-css-类名与-keyframes-清单)
-25. [全局变量 (globalThis 注册表)](#25-全局变量-globalthis-注册表)
-26. [测试策略](#26-测试策略)
-27. [环境变量清单](#27-环境变量清单)
-28. [更新日志 (f152945 之后)](#28-更新日志-f152945-之后)
-
-
-
 
 1. [邮件通知系统](#1-邮件通知系统-notify)
 2. [定时任务系统](#2-定时任务系统-scheduled-tasks)
@@ -42,12 +27,16 @@
 17. [扩展 UI 解析器](#17-扩展-ui-解析器-extension-custom-ui-parser)
 18. [代码块复制反馈 + 微交互动画](#18-代码块复制反馈--微交互动画)
 19. [辅助工具与基础设施](#19-辅助工具与基础设施)
-20. [系统架构与数据流图](#20-系统架构与数据流图)
-21. [接口契约 (API Contract)](#21-接口契约-api-contract)
-22. [CSS 类名与 Keyframes 清单](#22-css-类名与-keyframes-清单)
-23. [全局变量 (globalThis 注册表)](#23-全局变量-globalthis-注册表)
-24. [测试策略](#24-测试策略)
-25. [环境变量清单](#25-环境变量清单)
+20. [信任域 (Trust Domains)](#20-信任域-trust-domains)
+21. [PWA 支持](#21-pwa-支持)
+22. [模型价格预设 & 上游发现](#22-模型价格预设--上游发现)
+23. [系统架构与数据流图](#23-系统架构与数据流图)
+24. [接口契约 (API Contract)](#24-接口契约-api-contract)
+25. [CSS 类名与 Keyframes 清单](#25-css-类名与-keyframes-清单)
+26. [全局变量 (globalThis 注册表)](#26-全局变量-globalthis-注册表)
+27. [测试策略](#27-测试策略)
+28. [环境变量清单](#28-环境变量清单)
+29. [更新日志 (f152945 之后)](#29-更新日志-f152945-之后)
 
 ---
 
@@ -267,6 +256,7 @@ useMinimaxTokenPlan 轮询: intervalPercent 从 <100 → 100
 
 ### 概述
 为会话侧边栏添加收藏功能：星标切换 + 独立收藏 tab + 删除确认。
+**在 Sessions 选项卡中不出现收藏的折叠列表**——收藏会话仅在 "Favorites" 选项卡中显示。
 
 ### 文件清单
 | 文件 | 作用 |
@@ -281,14 +271,29 @@ useMinimaxTokenPlan 轮询: intervalPercent 从 <100 → 100
 - **独立生命周期**：不依赖 session 文件存在性，删除 session 文件不会留下悬空标记
 - **乐观更新**：前端立即翻转星标，失败时回滚
 - **双 tab 侧边栏**："Sessions" 和 "Favorites" 两个 tab
+- **单一展示位置**：收藏会话列表**仅**在 "Favorites" 选项卡中展示；Sessions 选项卡中不渲染任何收藏折叠列表/面板（避免重复入口和状态混乱）
+- **星标渲染**：每个 SessionItem 在 hover 时显示星标按钮，isFavorite=true 时填充金黄色 `#f59e0b`，不影响 SessionItem 本身的布局
 - **删除确认**：删除 session 前弹确认对话框，避免误删
 - **动画过渡**：星标添加/移除有视觉反馈（星标/删除按钮明确的 hover 和 active 状态）
+
+### UI 布局约定
+
+| 位置 | 渲染内容 | 备注 |
+|------|----------|------|
+| Sessions 选项卡 | 仅 SessionTreeItem + 上下文重置 + RUNNING 面板 | **不**包含收藏折叠列表 |
+| Favorites 选项卡 | favoriteSessions.flatMap → SessionItem 列表 | 独占面板，无折叠 |
+| SessionItem hover | ⭐ 星标按钮 | 全局可见，与所在 tab 无关 |
+
+> 为什么要拆掉 Sessions 选项卡里的折叠列表？
+> - 避免“同一会话出现在 Sessions 和 Favorites 两个位置”的状态歧义
+> - Favorites 选项卡本身是独立面板，不需要折叠
+> - 减少 sidebar 状态变量（`favoritesPanelOpen` 可以全部移除）
 
 ### 扩展点
 
 1. **收藏分组/标签**：
    - `favorites.json` 扩展为 `{ favoriteSessionIds: string[], tags: Record<string, string[]> }`
-   - `SessionSidebar.tsx` 加标签筛选 UI
+   - `SessionSidebar.tsx` 加标签筛选 UI（在 Favorites 选项卡中实现）
 
 2. **跨设备同步**：
    - 将 `favorites.json` 存储改到云端
@@ -584,6 +589,13 @@ Session 树构建算法从 O(n²) 优化到 O(n)、收藏 tab 分板、运行中
 - **上下文重置按钮**：两次点击确认机制，重置到根节点
 - **favicon 数据源**：session 的 `metadata.favicon` 字段用于显示 web app 图标
 
+### 收藏面板布局约定
+
+- Sessions / Favorites 两个选项卡独立渲染，**互不嵌套**
+- Sessions 选项卡中**不**出现折叠的 Favorites 列表（避免重复入口）
+- Favorites 选项卡为 flat list，无折叠状态
+- 删除 SessionSidebar 中的 `favoritesPanelOpen` state 及其 toggle 逻辑
+
 ---
 
 ## 16. 多级断点侧边栏
@@ -663,7 +675,128 @@ AppShell 将 sidebar 开关逻辑从 `useIsMobile` 升级为 `useBreakpoint`，�
 
 ---
 
-## 20. PWA 支持
+## 20. 信任域 (Trust Domains)
+
+### 概述
+
+pi-web 默认绑定在 loopback（`localhost` / `127.0.0.1`），但实际部署时常常需要通过反向代理（nginx / caddy / fnOS 反向代理）或者开发机 hostname（`macmini-177.local`）访问。这时请求会带着非 loopback 的 `Host` header，而浏览器又对跨源 API 请求做了 `Origin` / `Sec-Fetch-Site` 校验。
+
+为了在不写应用层鉴权的情况下防止 DNS rebinding 和跨源攻击，`lib/request-security.ts` 提供了一组**信任域**判定：所有 API 请求必须满足以下任一 host 才能通过：
+
+- loopback 名称（`localhost`、`*.localhost`）
+- IP 字面量（IPv4 / IPv6，避免被 DNS rebinding）
+- 显式配置的 host（环境变量 `PI_WEB_HOSTNAME`）
+- 显式配置的 allowlist（环境变量 `PI_WEB_ALLOWED_HOSTS`，支持精确匹配 + 通配符）
+
+### 支持的通配符语义
+
+通配符以 `*.` 开头，匹配所有子域名以及根域：
+
+| 配置 | 匹配 | 不匹配 |
+|------|------|--------|
+| `*.5ddd.com` | `5ddd.com`、`pi.5ddd.com`、`a.b.5ddd.com` | `5ddd.co`、`evil5ddd.com` |
+| `*.appvmm.fnos.net` | `appvmm.fnos.net`、`pi.appvmm.fnos.net`、`vmm1.appvmm.fnos.net` | `fnos.net`、`appvmm.fnos.io` |
+
+### 当前部署的信任域示例（参考 `.env.local`）
+
+```bash
+# 操作员显式选定的 bind hostname
+PI_WEB_HOSTNAME=macmini-177.local
+
+# 反向代理可能使用的外部域名（开发场景下 fnOS 的 mDNS）
+PI_WEB_ALLOWED_HOSTS=*.appvmm.fnos.net
+```
+
+### 文件清单
+| 文件 | 行数 | 作用 |
+|------|------|------|
+| `lib/request-security.ts` | 116 | `isApiRequestHostAllowed()` / `isApiRequestOriginAllowed()` / `isApiRequestAllowed()`；通配符匹配逻辑 |
+| `proxy.ts` | — | Next.js 代理中间件，在路由层强制调用 `isApiRequestAllowed()` |
+
+### 数据流
+
+```
+HTTP 请求进入 Next.js
+  ↓ proxy.ts / 路由处理器
+  ↓ isApiRequestAllowed(request)
+  ↓
+  ├─ isApiRequestHostAllowed() — Host header 校验
+  │    ├─ localhost / *.localhost ✅
+  │    ├─ IP 字面量 ✅
+  │    └─ configuredHostnames:
+  │         ├─ PI_WEB_HOSTNAME 精确匹配
+  │         └─ PI_WEB_ALLOWED_HOSTS 精确匹配 + *.通配符
+  │
+  └─ isApiRequestOriginAllowed() — 跨源校验
+       ├─ Sec-Fetch-Site: cross-site → 403
+       └─ Origin 必须等于 request origin
+  ↓
+  ❌ 任一失败 → 403 "Untrusted API request"
+  ✅ 通过 → 进入业务 handler
+```
+
+### 关键函数签名
+
+```typescript
+// lib/request-security.ts
+
+/**
+ * Host header 校验：判断请求的 Host 是否属于信任域
+ * @param request — fetch Request 对象
+ * @param configuredHostnames — 默认从 PI_WEB_HOSTNAME + PI_WEB_ALLOWED_HOSTS 解析
+ * @returns 是否允许该 Host
+ */
+export function isApiRequestHostAllowed(
+  request: Request,
+  configuredHostnames?: string[]
+): boolean;
+
+/**
+ * Origin 校验：拒绝浏览器跨源请求
+ */
+export function isApiRequestOriginAllowed(request: Request): boolean;
+
+/**
+ * 综合判定：Host + Origin 同时通过才放行
+ */
+export function isApiRequestAllowed(
+  request: Request,
+  configuredHostnames?: string[]
+): boolean;
+
+/**
+ * Hostname 解析辅助：支持通配符 `*.example.com`
+ * 返回归一化后的 hostname（小写、去除末尾 `.`、剥离 IPv6 方括号）
+ */
+function normalizeHostname(value: string): string;
+```
+
+### 扩展点
+
+1. **新增通配符信任域**（如 `*.internal.example.com`）：
+   - 在 `.env.local` 加 `PI_WEB_ALLOWED_HOSTS=*.internal.example.com`
+   - 或同时在 `proxy.ts` 注入到 `configuredHostnamesFromEnvironment()`
+
+2. **完全关闭 API 鉴权（开发模式）**：
+   - 不要关闭 `isApiRequestHostAllowed` —— 仍然保留 loopback 保护
+   - 如需暴露到 `0.0.0.0`，必须配 `PI_WEB_HOSTNAME` 或 `PI_WEB_ALLOWED_HOSTS`
+
+3. **新增 Origin 校验策略**（如 token 鉴权）：
+   - 在 `isApiRequestAllowed()` 里加一个 `hasValidBearerToken()` 短路
+   - 不要替换现有的 host/origin 校验
+
+### 变更历史
+
+| Commit | 说明 |
+|--------|------|
+| `f6d0737` | fix(security): support wildcard hostnames in API request security (`*.5ddd.com`) |
+| `4e3f1af` | fix(security): normalizeConfiguredHostname must handle wildcard before URL parsing |
+| `f2ca92d` | chore: remove Host header validation (DNS rebinding protection), keep Origin check only |
+| `a1063fc` | chore: remove Origin/Sec-Fetch-Site validation too |
+
+---
+
+## 21. PWA 支持
 
 ### 概述
 将 pi-web 转化为可安装的 Progressive Web App（PWA），支持离线访问、桌面图标安装、后台缓存。
@@ -692,7 +825,7 @@ AppShell 将 sidebar 开关逻辑从 `useIsMobile` 升级为 `useBreakpoint`，�
 
 ---
 
-## 21. 模型价格预设 & 上游发现
+## 22. 模型价格预设 & 上游发现
 
 ### 概述
 在模型管理界面提供价格预设表格，并支持从上游提供商（OpenAI、Anthropic 等）API 发现可用模型。
@@ -724,7 +857,7 @@ ModelsConfig UI
 1. **新增上游提供商**：在 `model-discovery-auth.ts` 加新的 `resolveAuth` case
 2. **新增价格预设**：在 `model-catalog.ts` 的 `getPricingPresets()` 返回对象中加 entry
 3. **过滤模型选项**：`ChatInput.tsx` 已支持输入过滤显示（894babf）
-## 22. 系统架构与数据流图
+## 23. 系统架构与数据流图
 
 ### 全局模块依赖
 
@@ -924,12 +1057,12 @@ flowchart LR
 
 ---
 
-## §23 接口契约 (API Contract)
+## §24 接口契约 (API Contract)
 
 > 本节定义所有自定义 API 路由的 request/response TypeScript 类型签名，以及 HTTP 状态码行为。
 > 开发 agent 可以直接将这些类型定义作为 spec 实现。
 
-### 21.1 通知系统 API
+### 24.1 通知系统 API
 
 #### `GET /api/notify`
 
@@ -1005,7 +1138,7 @@ interface DispatchRequest {
 
 ---
 
-### 21.2 收藏系统 API
+### 24.2 收藏系统 API
 
 #### `GET /api/sessions/favorites`
 
@@ -1038,7 +1171,7 @@ interface PostFavoriteResponse {
 
 ---
 
-### 21.3 定时任务系统 API
+### 24.3 定时任务系统 API
 
 #### `GET /api/scheduled-tasks`
 
@@ -1114,7 +1247,7 @@ interface CreateTaskResponse {
 
 ---
 
-### 21.4 终端系统 API
+### 24.4 终端系统 API
 
 #### `POST /api/terminal` — 创建终端
 
@@ -1228,7 +1361,7 @@ interface RunCommandSyncResponse {
 
 ---
 
-### 21.5 配额追踪 API
+### 24.5 配额追踪 API
 
 #### `GET /api/token-plan/[provider]`
 
@@ -1260,7 +1393,7 @@ interface TokenPlanCategory {
 
 ---
 
-### 21.6 诊断 API
+### 24.6 诊断 API
 
 #### `GET /api/diag/node-pty`
 
@@ -1283,12 +1416,12 @@ interface DiagResponse {
 
 ---
 
-## §24 CSS 类名与 Keyframes 清单
+## §25 CSS 类名与 Keyframes 清单
 
 > 以下列出所有在 `app/globals.css` 中新增的 CSS class 和 keyframes。
 > 注：CSS 变量颜色变化已在 §11 列出，此处不重复。
 
-### 22.1 新增 Keyframes
+### 25.1 新增 Keyframes
 
 | Keyframe 名 | 触发 | 用途 |
 |-------------|------|------|
@@ -1302,7 +1435,7 @@ interface DiagResponse {
 | `shortcuts-panel-in` | `.shortcuts-panel-backdrop` | 快捷键面板遮罩淡入 |
 | `spin` | `.spin-loop` | 加载中图标旋转 |
 
-### 22.2 新增 CSS Class
+### 25.2 新增 CSS Class
 
 | Class | 元素 | 用途 |
 |-------|------|------|
@@ -1323,7 +1456,7 @@ interface DiagResponse {
 | `.terminal-crt .xterm-screen canvas` | canvas | CRT 绿色发光滤镜 |
 | `.terminal-crt .xterm-cursor-layer .xterm-cursor` | 光标 | 琥珀色发光 |
 
-### 22.3 新增/修改的 Media Queries
+### 25.3 新增/修改的 Media Queries
 
 | 断点 | 影响 | 变更 |
 |------|------|------|
@@ -1334,11 +1467,11 @@ interface DiagResponse {
 
 ---
 
-## §25 全局变量 (globalThis 注册表)
+## §26 全局变量 (globalThis 注册表)
 
 > 本 fork 多处使用 `globalThis` 注册表模式，使得数据缓存和实例在 Next.js hot-reload 时存活。
 
-### 23.1 终端注册表
+### 26.1 终端注册表
 
 ```typescript
 declare global {
@@ -1352,7 +1485,7 @@ declare global {
 | `__piTerminals` | `Map<string, TerminalEntry>` | `lib/terminal-manager.ts` | 所有活跃终端 session |
 | `__piTerminalCleanupInstalled` | `boolean` | `lib/terminal-manager.ts` | 确保 process.on('exit') cleanup 只注册一次 |
 
-### 23.2 命令运行注册表
+### 26.2 命令运行注册表
 
 ```typescript
 declare global {
@@ -1364,7 +1497,7 @@ declare global {
 |------|------|------|------|
 | `__piCommandRuns` | `Map<string, CommandEntry>` | `lib/terminal-command-runner.ts` | 单次命令运行（5 分钟自动 evict） |
 
-### 23.3 收藏缓存
+### 26.3 收藏缓存
 
 ```typescript
 declare global {
@@ -1380,7 +1513,7 @@ declare global {
 | `__piFavoritesPromise` | Promise | `lib/favorites-store.ts` | 防并发读取 |
 | `__piFavoritesGeneration` | number | `lib/favorites-store.ts` | 缓存失效标记 |
 
-### 23.4 定时任务调度器
+### 26.4 定时任务调度器
 
 ```typescript
 interface SchedulerGlobal {
@@ -1397,11 +1530,11 @@ const TICK_KEY = "__pi_web_scheduled_tasks_scheduler__";
 
 ---
 
-## §26 测试策略
+## §27 测试策略
 
 > 本节定义新增功能的最低测试要求，用于 CI 验收和开发 agent 自检。
 
-### 24.1 单元测试要求
+### 27.1 单元测试要求
 
 | 模块 | 测试内容 | 框架建议 |
 |------|----------|----------|
@@ -1415,7 +1548,7 @@ const TICK_KEY = "__pi_web_scheduled_tasks_scheduler__";
 | `lib/terminal-manager.ts` | `resolveCwd` 存在/不存在/Windows路径/容器路径；`appendScrollback` 边界（超大 chunk、多 chunk trim） | Vitest（mock node-pty） |
 | `lib/scheduled-tasks-store.ts` | `computeNextRun` interval/daily/cron 的 next 计算 | Vitest |
 
-### 24.2 API 端到端测试
+### 27.2 API 端到端测试
 
 | API | 测试场景 |
 |-----|----------|
@@ -1427,7 +1560,7 @@ const TICK_KEY = "__pi_web_scheduled_tasks_scheduler__";
 | `GET /api/token-plan/minimax-cn` | API key 存在时返回 categories；不存在时 503 |
 | `POST /api/scheduled-tasks` (POST/PUT) | 创建/更新/验证错误返回 400 |
 
-### 24.3 组件交互测试
+### 27.3 组件交互测试
 
 | 组件 | 测试场景 | 方法 |
 |------|----------|------|
@@ -1438,7 +1571,7 @@ const TICK_KEY = "__pi_web_scheduled_tasks_scheduler__";
 | `MinimaxTokenPlanBar` | 配额展示/compact 模式/负载数据注入 | Playwright mock API |
 | `ChatMinimapFab` | 打开/跳转/关闭 | Playwright |
 
-### 24.4 升级/merge 回归检查
+### 27.4 升级/merge 回归检查
 
 每次从 upstream merge 后执行：
 
@@ -1462,7 +1595,7 @@ node_modules/.bin/tsc --noEmit
 
 ---
 
-## §27 环境变量清单
+## §28 环境变量清单
 
 | 变量 | 用途 | 必填 | 读取位置 |
 |------|------|------|----------|
@@ -1474,10 +1607,12 @@ node_modules/.bin/tsc --noEmit
 | `WORKSPACE_DIR` | Docker 容器内的默认工作目录 | 否 | `lib/terminal-manager.ts` `resolveCwd()` |
 | `PI_CODING_AGENT_DIR` | pi agent 数据目录覆盖 | 否 | `lib/terminal-manager.ts` `resolveCwd()` |
 | `GIT_REPO_URL` | Docker 入口脚本自动 clone 的仓库 | 否 | `docker-entrypoint.sh` |
+| `PI_WEB_HOSTNAME` | 显式允许的 bind hostname（精确匹配） | 否 | `lib/request-security.ts` |
+| `PI_WEB_ALLOWED_HOSTS` | 额外允许的 hostname（逗号分隔，支持 `*.domain` 通配符） | 否 | `lib/request-security.ts` |
 
 ---
 
-## 28. 更新日志 (f152945 之后)
+## 29. 更新日志 (f152945 之后)
 
 > 本文档最初编写时的基准 commit 是 `f152945`（gitlab-on-upstream-main merge）。
 > 以下记录之后的所有变更，帮助保持文档与代码同步。
@@ -1511,10 +1646,12 @@ node_modules/.bin/tsc --noEmit
 ### 28.2 SessionSidebar 变化
 | 变化 | 说明 |
 |------|------|
-| **删除** `favoritesPanelOpen` state | 收藏面板不再可折叠 |
+| **删除** `favoritesPanelOpen` state | 收藏面板不再可折叠（Favorites 选项卡内） |
 | **删除** 折叠的 Favorites 面板 | 改为 flat tab（与 Sessions 平级） |
 | **新增** `sidebarTab` state | `"sessions" | "favorites"` 切换 |
 | **保留** favorite toggle + 删除确认 | 核心功能不变 |
+| **删除** Sessions 选项卡内联收藏折叠列表 | 收藏仅在 "Favorites" 选项卡中展示，避免重复入口与状态歧义（§5 UI 布局约定） |
+| **删除** `favoriteSessions.length > 0 &&` 的内联渲染分支 | Sessions 选项卡不再需要这个条件 |
 
 ### 28.3 AppShell 变化
 | 变化 | 说明 |
