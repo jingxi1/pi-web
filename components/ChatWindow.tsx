@@ -3,6 +3,7 @@ import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, CustomMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
+import { parseCustomUi } from "@/lib/extension-custom-ui-parser";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
 import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 
@@ -1085,11 +1086,462 @@ function ExtensionCustomPanel({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const displayLines = normalizeCustomPanelLines(request.lines);
+  // Parse extension panel content into a structured representation so mobile
+  // users can tap options instead of typing digit keys. Falls back to the
+  // raw-text view when the parser can't classify the output (kind: "unknown").
+  const parsed = useMemo(
+    () => parseCustomUi(request.lines),
+    [request.id, request.lines],
+  );
 
   useEffect(() => {
     inputRef.current?.focus();
   }, [request.id]);
 
+  // ---- Structured options panel (single / multi select) ---------------------
+  if (parsed.kind === "options") {
+    const { question, items, selectedIndex, multiSelect } = parsed;
+    const submitLabel = t("chat.submit") || "Submit";
+    return (
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 95,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+          background: "rgba(0,0,0,0.18)",
+        }}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Extension panel"
+          onClick={(event) => {
+            if (!(event.target as HTMLElement).closest("button")) inputRef.current?.focus();
+          }}
+          style={{
+            position: "relative",
+            width: "min(920px, 100%)",
+            maxHeight: "min(760px, calc(100vh - 40px))",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            background: "var(--bg)",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
+            overflow: "hidden",
+            outline: "none",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <textarea
+            ref={inputRef}
+            aria-label={t("chat.extensionInput")}
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onKeyDown={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing) return;
+              const data = toTerminalKeyData(event);
+              if (!data) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onInput(request, data);
+            }}
+            onInput={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing) return;
+              const text = event.currentTarget.value;
+              event.currentTarget.value = "";
+              if (text) onInput(request, text);
+            }}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={(event) => {
+              composingRef.current = false;
+              const input = event.currentTarget;
+              queueMicrotask(() => {
+                const text = input.value;
+                input.value = "";
+                if (text) onInput(request, text);
+              });
+            }}
+            onPaste={(event) => {
+              event.preventDefault();
+              const text = event.clipboardData.getData("text");
+              if (text) onInput(request, asBracketedPaste(text));
+            }}
+            style={{
+              position: "absolute",
+              width: 1,
+              height: 1,
+              padding: 0,
+              border: 0,
+              opacity: 0,
+              pointerEvents: "none",
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "10px 12px",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>
+              {t("chat.extensionPanel")}
+              {multiSelect && (
+                <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 11, fontWeight: 500 }}>
+                  multi-select
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => onInput(request, "\x03")}
+              style={{
+                padding: "5px 9px",
+                borderRadius: 6,
+                border: "1px solid var(--border)",
+                background: "var(--bg-panel)",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              {t("chat.close")}
+            </button>
+          </div>
+          <div
+            style={{
+              padding: "12px 16px 8px",
+              color: "var(--text)",
+              fontSize: 14,
+              lineHeight: 1.45,
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            {question || t("chat.extensionPanel")}
+          </div>
+          <ul
+            style={{
+              listStyle: "none",
+              margin: 0,
+              padding: "4px 8px",
+              flex: 1,
+              overflowY: "auto",
+            }}
+          >
+            {items.map((item) => {
+              const isSelected = item.index === selectedIndex;
+              const checkedClass = multiSelect && item.checked ? "is-checked" : "";
+              return (
+                <li key={item.index} style={{ margin: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.isCustom) {
+                        inputRef.current?.focus();
+                        return;
+                      }
+                      const digit = String(item.index);
+                      onInput(request, digit);
+                      if (!multiSelect) onInput(request, "\r");
+                    }}
+                    className={["pi-extension-option", isSelected ? "is-selected" : "", checkedClass].filter(Boolean).join(" ")}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 10px",
+                      margin: "2px 0",
+                      borderRadius: 6,
+                      border: "1px solid",
+                      borderColor: isSelected ? "var(--accent)" : "transparent",
+                      background: isSelected ? "var(--bg-hover)" : "transparent",
+                      color: "var(--text)",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 8,
+                    }}
+                  >
+                    {multiSelect ? (
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: 3,
+                          border: "1.5px solid var(--border)",
+                          background: item.checked ? "var(--accent)" : "transparent",
+                          flexShrink: 0,
+                          marginTop: 1,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                        aria-hidden="true"
+                      >
+                        {item.checked && (
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </span>
+                    ) : (
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 12,
+                          color: "var(--text-dim)",
+                          minWidth: 20,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {item.index === -1 ? "✎" : `${item.index + 1}.`}
+                      </span>
+                    )}
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block" }}>{item.label}</span>
+                      {item.description && (
+                        <span
+                          style={{
+                            display: "block",
+                            color: "var(--text-muted)",
+                            fontSize: 12,
+                            marginTop: 2,
+                          }}
+                        >
+                          {item.description}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {multiSelect && (
+            <div
+              style={{
+                padding: "10px 12px",
+                borderTop: "1px solid var(--border)",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => onInput(request, "\r")}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 6,
+                  border: "1px solid var(--accent)",
+                  background: "var(--accent)",
+                  color: "var(--bg)",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                {submitLabel}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Review tab (multi-question summary) ----------------------------------
+  if (parsed.kind === "review") {
+    const { items, selectedIndex } = parsed;
+    return (
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 95,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+          background: "rgba(0,0,0,0.18)",
+        }}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Review answers"
+          onClick={(event) => {
+            if (!(event.target as HTMLElement).closest("button")) inputRef.current?.focus();
+          }}
+          style={{
+            position: "relative",
+            width: "min(920px, 100%)",
+            maxHeight: "min(760px, calc(100vh - 40px))",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            background: "var(--bg)",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
+            overflow: "hidden",
+            outline: "none",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <textarea
+            ref={inputRef}
+            aria-label={t("chat.extensionInput")}
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onKeyDown={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing) return;
+              const data = toTerminalKeyData(event);
+              if (!data) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onInput(request, data);
+            }}
+            onInput={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing) return;
+              const text = event.currentTarget.value;
+              event.currentTarget.value = "";
+              if (text) onInput(request, text);
+            }}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={(event) => {
+              composingRef.current = false;
+              const input = event.currentTarget;
+              queueMicrotask(() => {
+                const text = input.value;
+                input.value = "";
+                if (text) onInput(request, text);
+              });
+            }}
+            onPaste={(event) => {
+              event.preventDefault();
+              const text = event.clipboardData.getData("text");
+              if (text) onInput(request, asBracketedPaste(text));
+            }}
+            style={{
+              position: "absolute",
+              width: 1,
+              height: 1,
+              padding: 0,
+              border: 0,
+              opacity: 0,
+              pointerEvents: "none",
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "10px 12px",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>Review answers</div>
+            <button
+              onClick={() => onInput(request, "\x03")}
+              style={{
+                padding: "5px 9px",
+                borderRadius: 6,
+                border: "1px solid var(--border)",
+                background: "var(--bg-panel)",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              {t("chat.close")}
+            </button>
+          </div>
+          <ul
+            style={{
+              listStyle: "none",
+              margin: 0,
+              padding: "4px 8px",
+              flex: 1,
+              overflowY: "auto",
+            }}
+          >
+            {items.map((item, idx) => {
+              const isSelected = idx === selectedIndex;
+              return (
+                <li key={idx} style={{ margin: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => onInput(request, "\r")}
+                    className={isSelected ? "pi-extension-option is-selected" : "pi-extension-option"}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 10px",
+                      margin: "2px 0",
+                      borderRadius: 6,
+                      border: "1px solid",
+                      borderColor: isSelected ? "var(--accent)" : "transparent",
+                      background: isSelected ? "var(--bg-hover)" : "transparent",
+                      color: "var(--text)",
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span style={{ display: "block", color: "var(--text-muted)", fontSize: 11 }}>
+                      {item.questionLabel}
+                    </span>
+                    <span style={{ display: "block", marginTop: 2 }}>{item.answer}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div
+            style={{
+              padding: "10px 12px",
+              borderTop: "1px solid var(--border)",
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 8,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => onInput(request, "\r")}
+              style={{
+                padding: "6px 14px",
+                borderRadius: 6,
+                border: "1px solid var(--accent)",
+                background: "var(--accent)",
+                color: "var(--bg)",
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              Submit
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Unknown shape: fall through to the legacy raw-text view ---------------
   return (
     <div
       style={{

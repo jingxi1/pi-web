@@ -1234,3 +1234,30 @@ span.linenumber {
 .terminal-crt .xterm-cursor-layer .xterm-cursor {
   filter: drop-shadow(0 0 1px #ffb000) drop-shadow(0 0 4px rgba(255, 176, 0, 0.6));
 }
+
+/* --- Extension custom UI panel (mobile tap-to-select) --- */
+.pi-extension-option {
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+.pi-extension-option.is-selected {
+  /* selected row already gets borderColor + background from inline style;
+     this just adds a subtle left accent bar via a pseudo-element */
+  position: relative;
+}
+.pi-extension-option.is-selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+.pi-extension-option.is-checked:not(.is-selected) {
+  /* Multi-select: checked item dim background when not cursor */
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.pi-extension-option:active {
+  transform: scale(0.985);
+}
