@@ -119,7 +119,7 @@ const EDITING_CURSOR_RE = /[▌_]\s*$/;
  * We accept the checkmark prefix that pi-openplan uses for answered questions.
  */
 const REVIEW_ANSWER_RE = /^[ \t]*(> )?✓[ \t]+(.*?):[ \t]+(.*)$/;
-const REVIEW_SUBMIT_RE = /^[ \t]*>[ \t]+(Submit|submit answers?|confirm)/;
+const REVIEW_SUBMIT_RE = /^[ \t]*>[ \t]+(submit answers?|submit|confirm)\b/i;
 
 /**
  * Match the tab bar that pi-openplan renders at the top of multi-question
