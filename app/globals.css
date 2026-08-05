@@ -1052,3 +1052,185 @@ span.linenumber {
     font-size: 16px !important;
   }
 }
+
+/* ============================================================
+ * §25 — 自定义动效与工具样式（docs/custom-features.md §25）
+ * 这些是 PiTools 自定义功能的 CSS 配套：复制反馈、骨架屏、空状态卡片、
+ * 滚动 FAB、Toast、快捷键面板、终端 CRT、tooltip、tool-call 折叠等。
+ * 上游版本里 globals.css 没有这些，需要本地补上才能跟组件 CSS 匹配。
+ * ============================================================ */
+
+/* --- Keyframes --- */
+@keyframes code-copy-pulse {
+  0%   { transform: scale(1);   box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45); }
+  35%  { transform: scale(1.06); box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+  100% { transform: scale(1);   box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+
+@keyframes skeleton-shimmer {
+  0%   { background-position: -480px 0; }
+  100% { background-position: 480px 0; }
+}
+
+@keyframes quick-start-in {
+  0%   { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scroll-fab-in {
+  0%   { opacity: 0; transform: translate(-50%, 16px) scale(0.9); }
+  100% { opacity: 1; transform: translate(-50%, 0)   scale(1); }
+}
+@keyframes scroll-fab-out {
+  0%   { opacity: 1; transform: translate(-50%, 0)   scale(1); }
+  100% { opacity: 0; transform: translate(-50%, 16px) scale(0.9); }
+}
+
+@keyframes toast-in {
+  0%   { opacity: 0; transform: translateX(20px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes toast-out {
+  0%   { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(20px); }
+}
+
+@keyframes shortcuts-panel-in {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+/* --- Code block copy button: copied state --- */
+.markdown-code-action.is-copied {
+  color: rgb(34, 197, 94) !important;
+  border-color: rgba(34, 197, 94, 0.5) !important;
+  animation: code-copy-pulse 0.7s ease-out;
+}
+.markdown-code-action {
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+/* --- Loading skeleton (skeleton-shimmer) --- */
+.skeleton-line {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-hover) 0%,
+    var(--bg-panel) 40%,
+    var(--bg-hover) 80%
+  );
+  background-size: 960px 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer 1.6s linear infinite;
+  opacity: 0.85;
+}
+
+/* --- Empty-state quick-start cards --- */
+.quick-start-card {
+  opacity: 0;
+  animation: quick-start-in 0.32s ease-out forwards;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.quick-start-card:hover {
+  background: var(--bg-hover) !important;
+  border-color: var(--accent) !important;
+  transform: translateY(-1px);
+}
+
+/* --- Scroll-to-bottom FAB --- */
+.scroll-fab-enter {
+  animation: scroll-fab-in 0.18s ease-out forwards;
+}
+.scroll-fab-exit {
+  animation: scroll-fab-out 0.18s ease-in forwards;
+  pointer-events: none;
+}
+
+/* --- Toast notifications --- */
+.toast-host-anim {
+  animation: toast-in 0.18s ease-out;
+}
+.toast-host-anim[data-state="exiting"] {
+  animation: toast-out 0.18s ease-in forwards;
+}
+
+/* --- Shortcuts panel --- */
+.shortcuts-panel-backdrop {
+  animation: shortcuts-panel-in 0.16s ease-out;
+}
+
+/* --- pi-tooltip (data-tooltip 浮层) --- */
+.pi-tooltip {
+  position: relative;
+  display: inline-flex;
+}
+.pi-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(2px);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.05s ease, transform 0.18s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  z-index: 1200;
+}
+.pi-tooltip:hover::after,
+.pi-tooltip:focus-within::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  transition-delay: 0.05s;
+}
+
+/* --- Tool-call body (grid-template-rows collapse/expand) --- */
+.tool-call-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.22s cubic-bezier(0.32, 0.72, 0.18, 1),
+              opacity 0.18s ease;
+}
+.tool-call-body.is-expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.tool-call-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* --- Terminal CRT theme --- */
+.terminal-crt {
+  position: relative;
+  background: #0a0e0a;
+}
+.terminal-crt::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.18) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+  z-index: 2;
+}
+.terminal-crt .xterm-screen canvas {
+  filter: drop-shadow(0 0 1px #7cfc00) drop-shadow(0 0 3px rgba(124, 252, 0, 0.4));
+}
+.terminal-crt .xterm-cursor-layer .xterm-cursor {
+  filter: drop-shadow(0 0 1px #ffb000) drop-shadow(0 0 4px rgba(255, 176, 0, 0.6));
+}
