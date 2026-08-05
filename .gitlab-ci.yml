@@ -1,0 +1,41 @@
+stages:
+  - test
+
+# Mirror of .github/workflows/ci.yml for the GitLab fork.
+# Lighter than GHA — the GitLab runner already has Node 22.
+
+default:
+  image: node:22.19.0-bookworm-slim
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+
+install_dependencies:
+  stage: .pre
+  script:
+    - npm ci --no-audit --no-fund
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 30 minutes
+
+lint:
+  stage: test
+  needs: [install_dependencies]
+  script:
+    - npm run lint
+
+typecheck:
+  stage: test
+  needs: [install_dependencies]
+  script:
+    - npx tsc --noEmit
+
+unit_tests:
+  stage: test
+  needs: [install_dependencies]
+  script:
+    - npm test
