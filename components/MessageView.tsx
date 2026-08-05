@@ -242,6 +242,9 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             <button
               onClick={copyContent}
                title={t("i18n.copyMessage")}
+               aria-label={copied ? t("i18n.copied") : t("i18n.copyMessage")}
+               aria-live="polite"
+               className={copied ? "markdown-code-action is-copied" : undefined}
               style={{
                 display: "flex", alignItems: "center", gap: 4,
                 padding: "3px 8px", height: 22,
@@ -566,6 +569,9 @@ function AssistantMessageView({
           <button
             onClick={copyContent}
              title={t("i18n.copyMessage")}
+             aria-label={copied ? t("i18n.copied") : t("i18n.copyMessage")}
+             aria-live="polite"
+             className={copied ? "markdown-code-action is-copied" : undefined}
             style={{
               display: "flex", alignItems: "center", gap: 4,
               padding: "3px 8px", height: 22,
@@ -1271,6 +1277,10 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
           {text || detailsText ? (
             <button
               onClick={copyContent}
+              title={t("i18n.copyMessage")}
+              aria-label={copied ? t("i18n.copied") : t("i18n.copyMessage")}
+              aria-live="polite"
+              className={copied ? "markdown-code-action is-copied" : undefined}
               style={{
                 padding: "3px 7px",
                 border: "none",
@@ -1278,9 +1288,21 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
                 color: copied ? "var(--accent)" : "var(--text-dim)",
                 cursor: "pointer",
                 fontSize: 11,
+                display: "flex",
+                alignItems: "center",
               }}
             >
-               {copied ? t("i18n.copied") : t("i18n.copy")}
+              {copied ? (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 4 }}>
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 4 }}>
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              )}
+              {copied ? t("i18n.copied") : t("i18n.copy")}
             </button>
           ) : null}
           {(hasDetails || isHiddenDisplay) && (
