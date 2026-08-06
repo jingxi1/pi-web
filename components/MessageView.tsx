@@ -7,6 +7,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
 import { getAssistantErrorMessage, isEmptyThinkingBlock } from "@/lib/message-display";
 import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
+import { skillExpansionToCommand } from "@/lib/slash-display";
 import type {
   AgentMessage,
   UserMessage,
@@ -23,10 +24,6 @@ import type {
 
 const MAX_THINKING_CACHE_ENTRIES = 100;
 const thinkingContentCache = new Map<string, Promise<string>>();
-
-// Cap the user "sent" bubble's height so an abnormally long message does not
-// push the conversation off screen; overflow scrolls inside the bubble.
-const USER_BUBBLE_MAX_HEIGHT = 300;
 
 function loadThinkingContent(sessionId: string, entryId: string, blockIndex: number): Promise<string> {
   const key = `${sessionId}:${entryId}:${blockIndex}`;
@@ -69,7 +66,7 @@ interface Props {
   forking?: boolean;
   onNavigate?: (entryId: string) => void;
   prevAssistantEntryId?: string;
-  onEditContent?: (content: string) => void;
+  onEditContent?: (message: UserMessage) => void;
   showTimestamp?: boolean;
   prevTimestamp?: number;
   sessionId?: string;
@@ -86,6 +83,25 @@ function formatTime(ts?: number): string | null {
   if (isToday) return time;
   const date = d.toLocaleDateString([], { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
   return `${date} ${time}`;
+}
+
+export function replaceUserMessageText(message: UserMessage, text: string): UserMessage {
+  if (typeof message.content === "string") return { ...message, content: text };
+
+  const content: Array<TextContent | ImageContent> = [];
+  let replaced = false;
+  for (const block of message.content) {
+    if (block.type !== "text") {
+      content.push(block);
+      continue;
+    }
+    if (!replaced) {
+      content.push({ ...block, text });
+      replaced = true;
+    }
+  }
+  if (!replaced) content.unshift({ type: "text", text });
+  return { ...message, content };
 }
 
 function haveSameRelevantToolResults(
@@ -150,11 +166,12 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   forking?: boolean;
   onNavigate?: (entryId: string) => void;
   prevAssistantEntryId?: string;
-  onEditContent?: (content: string) => void;
+  onEditContent?: (message: UserMessage) => void;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const content =
     typeof message.content === "string"
@@ -169,12 +186,49 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
       ? []
       : message.content.filter((b): b is ImageContent => b.type === "image");
 
+  const commandText = skillExpansionToCommand(content);
+  const commandSeparator = commandText?.search(/\s/) ?? -1;
+  const commandName = commandText
+    ? commandSeparator === -1 ? commandText : commandText.slice(0, commandSeparator)
+    : "";
+  const commandArgs = commandText && commandSeparator !== -1
+    ? commandText.slice(commandSeparator + 1)
+    : "";
+
   const time = formatTime(message.timestamp);
   const canFork = !!entryId && !!onFork;
+  const copyTarget = commandText ?? content;
+  const editTarget = commandText ? replaceUserMessageText(message, commandText) : message;
+
+  const imageBlocksNode = imageBlocks.length > 0 && (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: content ? 8 : 0 }}>
+      {imageBlocks.map((img, i) => {
+        // lib/types.ts ImageContent uses {source:{type,data,media_type,url}}
+        // pi-ai on-disk format uses flat {data, mimeType} — handle both
+        const flat = img as unknown as { data?: string; mimeType?: string };
+        const src = img.source
+          ? img.source.type === "base64"
+            ? `data:${img.source.media_type};base64,${img.source.data}`
+            : img.source.url ?? ""
+          : flat.data
+            ? `data:${flat.mimeType};base64,${flat.data}`
+            : "";
+        return (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={i}
+            src={src}
+            alt=""
+            style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid rgba(59,130,246,0.15)" }}
+          />
+        );
+      })}
+    </div>
+  );
   const canNavigate = !!prevAssistantEntryId && !!onNavigate;
 
   const copyContent = () => {
-    copyText(content).then(() => {
+    copyText(copyTarget).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -199,36 +253,73 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             lineHeight: 1.6,
             color: "var(--text)",
             wordBreak: "break-word",
-            maxHeight: USER_BUBBLE_MAX_HEIGHT,
-            overflowY: "auto",
           }}
         >
-          {imageBlocks.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: content ? 8 : 0 }}>
-              {imageBlocks.map((img, i) => {
-                // lib/types.ts ImageContent uses {source:{type,data,media_type,url}}
-                // pi-ai on-disk format uses flat {data, mimeType} — handle both
-                const flat = img as unknown as { data?: string; mimeType?: string };
-                const src = img.source
-                  ? img.source.type === "base64"
-                    ? `data:${img.source.media_type};base64,${img.source.data}`
-                    : img.source.url ?? ""
-                  : flat.data
-                    ? `data:${flat.mimeType};base64,${flat.data}`
-                    : "";
-                return (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={i}
-                    src={src}
-                    alt=""
-                    style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid rgba(59,130,246,0.15)" }}
-                  />
-                );
-              })}
+          {commandText ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+              {imageBlocksNode}
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => setExpanded((prev) => !prev)}
+                  title={expanded ? t("i18n.collapse") : t("i18n.expand")}
+                  aria-expanded={expanded}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    flexShrink: 0,
+                    padding: 0,
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "var(--accent)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 13,
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {commandName}
+                  </span>
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ flexShrink: 0, opacity: 0.75, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+                    aria-hidden="true"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                {commandArgs && (
+                  <span style={{
+                    color: "var(--text)",
+                    fontSize: 14,
+                    lineHeight: 1.6,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    minWidth: 0,
+                    flex: 1,
+                  }}>
+                    {commandArgs}
+                  </span>
+                )}
+              </div>
+              {expanded && (
+                <MarkdownBody className="markdown-user-message" cwd={cwd} onOpenFile={onOpenFile}>{content}</MarkdownBody>
+              )}
             </div>
-          )}
+          ) : (
+          <>
+          {imageBlocksNode}
           {content && <MarkdownBody className="markdown-user-message" cwd={cwd} onOpenFile={onOpenFile}>{content}</MarkdownBody>}
+          </>
+          )}
         </div>
 
       </div>
@@ -248,9 +339,6 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             <button
               onClick={copyContent}
                title={t("i18n.copyMessage")}
-               aria-label={copied ? t("i18n.copied") : t("i18n.copyMessage")}
-               aria-live="polite"
-               className={copied ? "markdown-code-action is-copied" : undefined}
               style={{
                 display: "flex", alignItems: "center", gap: 4,
                 padding: "3px 8px", height: 22,
@@ -287,7 +375,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             }}>
               {canNavigate && (
                 <button
-                  onClick={() => { onNavigate!(prevAssistantEntryId!); onEditContent?.(content); }}
+                  onClick={() => { onNavigate!(prevAssistantEntryId!); onEditContent?.(editTarget); }}
                    title={t("i18n.editFromHereTitle")}
                   style={{
                     display: "flex", alignItems: "center", gap: 4,
@@ -575,9 +663,6 @@ function AssistantMessageView({
           <button
             onClick={copyContent}
              title={t("i18n.copyMessage")}
-             aria-label={copied ? t("i18n.copied") : t("i18n.copyMessage")}
-             aria-live="polite"
-             className={copied ? "markdown-code-action is-copied" : undefined}
             style={{
               display: "flex", alignItems: "center", gap: 4,
               padding: "3px 8px", height: 22,
@@ -773,45 +858,40 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
         </svg>
       </button>
 
-      {/* ── Animated body: input args + paired result ── */}
-      <div
-        className={`tool-call-body${expanded ? " is-expanded" : ""}`}
-        aria-hidden={!expanded}
-      >
-        <div className="tool-call-body-inner">
-          {!isEditTool && (
-            <pre
-              style={{
-                margin: 0,
-                padding: "8px 10px",
-                color: "var(--text-muted)",
-                fontSize: 12,
-                lineHeight: 1.5,
-                overflow: "auto",
-                background: "var(--bg-subtle)",
-                borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-              }}
-            >
-              {inputStr}
-            </pre>
-          )}
-          {result && (
-            resultDiff ? (
-              <PairedDiffResult
-                diff={resultDiff}
-              />
-            ) : (
-              <PairedResult
-                text={resultText ?? ""}
-                isEmpty={resultIsEmpty}
-                isError={isError}
-              />
-            )
-          )}
-        </div>
-      </div>
+      {/* ── Expanded: input args ── */}
+      {expanded && !isEditTool && (
+        <pre
+          style={{
+            margin: 0,
+            padding: "8px 10px",
+            color: "var(--text-muted)",
+            fontSize: 12,
+            lineHeight: 1.5,
+            overflow: "auto",
+            background: "var(--bg-subtle)",
+            borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          }}
+        >
+          {inputStr}
+        </pre>
+      )}
+
+      {/* ── Paired result — only shown when expanded ── */}
+      {expanded && result && (
+        resultDiff ? (
+          <PairedDiffResult
+            diff={resultDiff}
+          />
+        ) : (
+          <PairedResult
+            text={resultText ?? ""}
+            isEmpty={resultIsEmpty}
+            isError={isError}
+          />
+        )
+      )}
     </div>
   );
 }
@@ -1283,10 +1363,6 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
           {text || detailsText ? (
             <button
               onClick={copyContent}
-              title={t("i18n.copyMessage")}
-              aria-label={copied ? t("i18n.copied") : t("i18n.copyMessage")}
-              aria-live="polite"
-              className={copied ? "markdown-code-action is-copied" : undefined}
               style={{
                 padding: "3px 7px",
                 border: "none",
@@ -1294,21 +1370,9 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
                 color: copied ? "var(--accent)" : "var(--text-dim)",
                 cursor: "pointer",
                 fontSize: 11,
-                display: "flex",
-                alignItems: "center",
               }}
             >
-              {copied ? (
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 4 }}>
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 4 }}>
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-              )}
-              {copied ? t("i18n.copied") : t("i18n.copy")}
+               {copied ? t("i18n.copied") : t("i18n.copy")}
             </button>
           ) : null}
           {(hasDetails || isHiddenDisplay) && (
