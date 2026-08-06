@@ -79,6 +79,7 @@ export function AppShell() {
   useEffect(() => {
     setMobileSidebarReady(true);
   }, []);
+  const activeNewSessionDraftKeyRef = useRef<string | null>(null);
 
   // Swipe-left on the open sidebar to dismiss it (mobile/tablet drawer).
   const sidebarSwipe = useSwipeDismiss({
