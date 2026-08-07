@@ -25,6 +25,7 @@ import { useAudio } from "@/hooks/useAudio";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
+import { showCompletionNotification } from "@/lib/browser-notifications";
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import { clearLastOpen, getLastOpenSession, setLastOpenSession } from "@/lib/workspace-memory";
 import {
@@ -488,7 +489,31 @@ export function AppShell() {
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
-  }, []);
+
+    if (document.visibilityState === "visible") return;
+    if (!("Notification" in window)) return;
+
+    const targetSession = selectedSession;
+    const fire = () => {
+      const title = selectedSession?.name ?? translate("i18n.sessionComplete");
+      const sessionUrl = targetSession ? `/?session=${encodeURIComponent(targetSession.id)}` : "/";
+      void showCompletionNotification({
+        title,
+        body: translate("i18n.taskFinished"),
+        sessionUrl,
+        onClick: () => {
+          window.focus();
+          if (targetSession) handleSelectSession(targetSession);
+        },
+      });
+    };
+
+    if (Notification.permission === "granted") {
+      fire();
+    } else if (Notification.permission === "default") {
+      void Notification.requestPermission().then((p) => { if (p === "granted") fire(); });
+    }
+  }, [handleSelectSession, selectedSession, translate]);
 
   const handleAutoName = useCallback(async () => {
     const sessionId = selectedSession?.id;
