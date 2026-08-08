@@ -23,6 +23,18 @@ import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
 import { getInitialNavigation } from "@/lib/initial-navigation";
+import { clearLastOpen, getLastOpenSession, setLastOpenSession } from "@/lib/workspace-memory";
+import {
+  getDefaultRightPanelWidth,
+  getRightPanelMaxWidth,
+  getSidebarMaxWidth,
+  RIGHT_PANEL_FALLBACK_WIDTH,
+  RIGHT_PANEL_MAX_WIDTH,
+  RIGHT_PANEL_MIN_WIDTH,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+} from "@/lib/panel-layout";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ProjectTrustStatus } from "@/lib/api-types";
 import type { ChatInputHandle } from "./ChatInput";
@@ -223,6 +235,24 @@ export function AppShell() {
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !initialSessionId);
   // Suppresses sessionKey bump in handleCwdChange during the initial URL restore
   const suppressCwdBumpRef = useRef(false);
+  // Guards the async workspace restore so a slow response from an earlier
+  // switch cannot resurrect a session into a project the user already left.
+  const workspaceRestoreTokenRef = useRef(0);
+
+  const invalidateWorkspaceRestore = useCallback(() => {
+    workspaceRestoreTokenRef.current += 1;
+  }, []);
+
+  // Persist every active-session transition, including new and forked sessions
+  // that bypass the sidebar selection handler. Transient sessions do not yet
+  // carry projectRoot, so use the active project identity until hydration.
+  useEffect(() => {
+    if (!selectedSession) return;
+    const projectKey = selectedSession.projectRoot
+      ?? activeProjectRootRef.current
+      ?? selectedSession.cwd;
+    setLastOpenSession(projectKey, selectedSession.id);
+  }, [selectedSession]);
 
   useEffect(() => {
     const requestedCwd = initialNavigation.requestedCwd;
@@ -259,7 +289,49 @@ export function AppShell() {
     return () => controller.abort();
   }, [initialNavigation]);
 
+  // Restore the workspace's last open session after switching to it. Called
+  // from handleCwdChange once the outgoing context has been reset. The session
+  // is looked up against the live list so a deleted or drifted session falls
+  // back to the default welcome page instead of erroring.
+  const restoreWorkspaceContext = useCallback((projectKey: string) => {
+    const token = ++workspaceRestoreTokenRef.current;
+    const lastOpenSessionId = getLastOpenSession(projectKey);
+    if (!lastOpenSessionId) return;
+    void fetch("/api/sessions")
+      .then((r) => (r.ok ? (r.json() as Promise<{ sessions: SessionInfo[] }>) : null))
+      .then((d) => {
+        if (token !== workspaceRestoreTokenRef.current) return; // stale switch
+        const s = d?.sessions.find((x) => x.id === lastOpenSessionId);
+        if (!s) {
+          // The list loaded but the remembered session is gone — forget it.
+          // When the list itself failed (d === null) keep the memory so a
+          // later switch retries the restore.
+          if (d) clearLastOpen(projectKey);
+          return;
+        }
+        if ((s.projectRoot ?? s.cwd) !== projectKey) {
+          // Defensive: the remembered session drifted out of this workspace.
+          clearLastOpen(projectKey);
+          return;
+        }
+        // Selecting the session must remount the chat with the session
+        // present: useAgentSession loads content in a mount-only effect, so
+        // the null-session welcome mount from the switch would never load
+        // the restored session's messages.
+        setSelectedSession(s);
+        setSessionKey((k) => k + 1);
+        if (new URLSearchParams(window.location.search).get("session") !== s.id) {
+          router.replace(`?session=${encodeURIComponent(s.id)}`, { scroll: false });
+        }
+      })
+      .catch(() => {
+        // Network hiccup: keep the remembered session for a later retry.
+      });
+  }, [router]);
+
   const handleCwdChange = useCallback((cwd: string | null, projectRoot?: string | null) => {
+    invalidateWorkspaceRestore();
+    const currentFreshCwd = newSessionCwd ?? activeCwd;
     setActiveCwd(cwd);
     // Skip if cwd is null (initial mount).
     if (!cwd) return;
@@ -302,8 +374,21 @@ export function AppShell() {
     setRightPanelOpen(false);
     router.replace("/", { scroll: false });
   }, [router, selectedSession]);
+    if (currentProject !== newProject) {
+      // File tabs are keyed by absolute path, so tabs opened in the previous
+      // project must not linger. Same-project worktree switches keep them.
+      setFileTabs([]);
+      setActiveFileTabId(null);
+      setRightPanelOpen(false);
+      // Restore the workspace we switched to: its last open session, or keep
+      // the default welcome page when none is remembered.
+      restoreWorkspaceContext(newProject);
+    }
+    router.replace("/", { scroll: false });
+  }, [activeCwd, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
+    invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
     // Re-clicking the already-open session must not remount the chat and
     // re-run the full load/positioning cycle. Only skip when the effective
@@ -335,9 +420,14 @@ export function AppShell() {
     if (!isRestore) {
       router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
-  }, [router, isMobile, selectedSession]);
+  }, [invalidateWorkspaceRestore, router, isMobile, selectedSession]);
 
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
+  const handleNewSession = useCallback((sessionId: string, cwd: string) => {
+    invalidateWorkspaceRestore();
+    const draftKey = `new:${sessionId}:${cwd}`;
+    activeNewSessionDraftKeyRef.current = draftKey;
+    setNewSessionDraftId(sessionId);
     setSelectedSession(null);
     setNewSessionCwd(cwd);
     setSessionKey((k) => k + 1);
@@ -347,7 +437,7 @@ export function AppShell() {
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
     router.replace("/", { scroll: false });
-  }, [router, isMobile]);
+  }, [invalidateWorkspaceRestore, router, isMobile]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
@@ -372,12 +462,17 @@ export function AppShell() {
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo) => {
+  const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string) => {
+    setRefreshKey((k) => k + 1);
+    if (activeNewSessionDraftKeyRef.current !== sourceDraftKey) return;
+    invalidateWorkspaceRestore();
+    activeNewSessionDraftKeyRef.current = null;
     setNewSessionCwd(null);
     setSelectedSession(session);
     setRefreshKey((k) => k + 1);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
-  }, [router, hydrateSelectedSession]);
+  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
@@ -425,6 +520,8 @@ export function AppShell() {
   }, []);
 
   const handleSessionForked = useCallback((newSessionId: string) => {
+    invalidateWorkspaceRestore();
+    activeNewSessionDraftKeyRef.current = null;
     setRefreshKey((k) => k + 1);
     setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
@@ -434,7 +531,7 @@ export function AppShell() {
     }));
     hydrateSelectedSession(newSessionId);
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
-  }, [router, hydrateSelectedSession]);
+  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   const handleInitialRestoreDone = useCallback(() => {
     setInitialSessionRestored(true);
@@ -442,6 +539,7 @@ export function AppShell() {
 
   const handleSessionDeleted = useCallback((sessionId: string) => {
     autoResumeStore.cancel(sessionId);
+    invalidateWorkspaceRestore();
     setRefreshKey((k) => k + 1);
     if (selectedSession?.id === sessionId) {
       const cwd = selectedSession.cwd;
@@ -454,7 +552,7 @@ export function AppShell() {
       setActiveTopPanel(null);
       router.replace("/", { scroll: false });
     }
-  }, [selectedSession, router]);
+  }, [invalidateWorkspaceRestore, selectedSession, router]);
 
   const handleOpenFile = useCallback((
     filePath: string,
