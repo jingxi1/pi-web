@@ -400,6 +400,25 @@ Dialog.bottom     = FAB.bottom + 40 + 12              (px,  40 = FAB height, 12 
 | `borderRadius` | `20` (按钮) / `12` (对话框) | 与 composer 圆角 `12` 视觉对齐 |
 | `background` | `var(--bg-panel)` | 跟随主题 |
 
+**与 composer 的对齐规则**
+
+FAB 的 `right: 16` 必须与 composer 的**可见内容右边缘**对齐。这要求 composer 在有 FAB 的断点（tablet）下也使用 `right: 16` 的 padding：
+
+```tsx
+// components/ChatInput.tsx
+import { useBreakpoint } from "@/hooks/useBreakpoint";
+
+const breakpoint = useBreakpoint();
+const composerStyle = {
+  padding: "0 16px 8px",
+  // desktop: 36 px reserved for ChatMinimap (16 + 36 + gap)
+  // tablet/mobile: 16 px — matches FAB right: 16 so the two share the same right edge
+  paddingRight: breakpoint === "desktop" ? 52 : 16,
+};
+```
+
+**常见错误**：在所有断点下硬编码 `paddingRight: 52` 会导致 tablet 上 FAB 与 composer 内容右边缘错位 36 px（composer 有空洞 padding，FAB 贴在外侧）。
+
 **多按钮堆叠模板**
 
 未来如需在右下角添加更多浮动按钮（如回到底部、音视频切换等），统一按以下偏移叠加：

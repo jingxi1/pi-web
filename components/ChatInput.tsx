@@ -17,6 +17,7 @@ import {
 } from "@/lib/file-fuzzy";
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useI18n } from "@/hooks/useI18n";
 import { useVisualViewport } from "@/hooks/useVisualViewport";
 import { autoResumeStore, useAutoResumeSchedule } from "@/lib/auto-resume-store";
@@ -356,6 +357,7 @@ retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
 }: Props, ref) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
+  const breakpoint = useBreakpoint();
 const { keyboardHeight } = useVisualViewport();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -1271,7 +1273,10 @@ const cameraInputRef = useRef<HTMLInputElement>(null);
         flexShrink: 0,
         background: "transparent",
         padding: "0 16px 8px",
-        paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
+        // Right padding reserves 36px for ChatMinimap (desktop) and matches
+        // the FAB right offset of 16px (tablet/mobile) so input text and
+        // the bottom-right icon stack share the same right edge.
+        paddingRight: breakpoint === "desktop" ? 52 : 16,
 transform: keyboardHeight > 0 ? `translateY(-${keyboardHeight}px)` : undefined,
         transition: "transform 0.15s ease",
       }}
