@@ -889,6 +889,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
             streamingMessage={streamState.streamingMessage}
             scrollContainer={scrollContainerRef}
             messageRefs={messageRefs}
+            bottomOffset={bottomComposerHeight + 8}
           />
         ) : null}
 

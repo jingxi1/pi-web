@@ -8,6 +8,14 @@ interface Props {
   streamingMessage: Partial<AgentMessage> | null;
   scrollContainer: RefObject<HTMLDivElement | null>;
   messageRefs: RefObject<(HTMLDivElement | null)[]>;
+  /**
+     * Distance from the bottom of the viewport in px.
+     * Pass `bottomComposerHeight` from ChatWindow so the FAB always sits
+     * directly above the input composer regardless of how tall it grows
+     * (attached images, expanded textarea, queued messages, etc.).
+     * Defaults to 88 px which matches an idle single-line composer.
+     */
+  bottomOffset?: number;
 }
 
 function getMessagePreview(msg: AgentMessage | Partial<AgentMessage>): string {
@@ -55,7 +63,7 @@ interface NodeItem {
   index: number;
 }
 
-export function ChatMinimapFab({ messages, streamingMessage, messageRefs }: Props) {
+export function ChatMinimapFab({ messages, streamingMessage, messageRefs, bottomOffset = 88 }: Props) {
   const [open, setOpen] = useState(false);
 
   const allMessages = useMemo(
@@ -111,7 +119,7 @@ export function ChatMinimapFab({ messages, streamingMessage, messageRefs }: Prop
         aria-expanded={open}
         style={{
           position: "fixed",
-          bottom: 88,
+          bottom: bottomOffset,
           right: 16,
           zIndex: 50,
           display: "flex",
@@ -155,7 +163,7 @@ export function ChatMinimapFab({ messages, streamingMessage, messageRefs }: Prop
             aria-label="Message list"
             style={{
               position: "fixed",
-              bottom: 140,
+              bottom: bottomOffset + 52, // FAB (40) + 12 gap above it
               right: 16,
               left: 16,
               maxHeight: "60vh",

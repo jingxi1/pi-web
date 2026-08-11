@@ -351,7 +351,7 @@ useMinimaxTokenPlan 轮询: intervalPercent 从 <100 → 100
 ### 文件清单
 | 文件 | 作用 |
 |------|------|
-| `components/ChatMinimapFab.tsx` | ~220 行：浮动按钮 + 弹出消息列表面板 |
+| `components/ChatMinimapFab.tsx` | ~225 行：浮动按钮 + 弹出消息列表面板 |
 
 ### 设计决策
 
@@ -361,6 +361,60 @@ useMinimaxTokenPlan 轮询: intervalPercent 从 <100 → 100
 - 消息预览：取前 120 字符普通文本或 toolName 列表
 - 展示 user 消息左侧带 accent 色竖条
 
+### 布局规范（Bottom-Right Icon Stack）
+
+FAB 是 `position: fixed` 元素，位于视口右下角。其与底部 composer 的关系使用一个**显式的高度偏移 prop**（`bottomOffset`），不接受硬编码常量。
+
+**Props**
+
+| Prop | 类型 | 默认值 | 含义 |
+|------|------|--------|------|
+| `bottomOffset` | `number` | `88` | FAB 距视口底部的像素距离。**应等于 `bottomComposerHeight + 8`** —— 加上 composer 自身 `paddingBottom: 8` 让 FAB 恰好贴在 composer 上沿 |
+
+**计算规则**
+
+```
+FAB.bottom        = bottomComposerHeight + 8          (px)
+Dialog.bottom     = FAB.bottom + 40 + 12              (px,  40 = FAB height, 12 = gap)
+```
+
+**为什么不用固定值**
+
+- Composer 高度会随输入内容动态变化：
+  - 单行输入框 idle 状态：~80 px
+  - 多行展开：~120–200 px
+  - 附加图片预览：+72 px
+  - 队列消息显示：+28 px
+- 固定 `bottom: 88` 在多行或带附件时会与 composer 重叠
+- `bottomComposerHeight` 由 `ChatWindow` 通过 `ResizeObserver` 实时维护，FAB 接收后无需自己监听 DOM
+
+**位置约束（适用于所有右下角 fixed 元素）**
+
+| 维度 | 值 | 说明 |
+|------|----|------|
+| `right` | `16` | 距右边缘 16 px |
+| `bottom` | `bottomOffset` | 动态：composer 高度 + 8 |
+| `width` / `height` | 单按钮 ≤ 40 × 40 | 多按钮堆叠时叠加垂直偏移 |
+| `gap` | `8` | 按钮间垂直间距 |
+| `zIndex` | `50` | FAB；`51` 弹出对话框；`49` 背景遮罩 |
+| `borderRadius` | `20` (按钮) / `12` (对话框) | 与 composer 圆角 `12` 视觉对齐 |
+| `background` | `var(--bg-panel)` | 跟随主题 |
+
+**多按钮堆叠模板**
+
+未来如需在右下角添加更多浮动按钮（如回到底部、音视频切换等），统一按以下偏移叠加：
+
+```tsx
+<button style={{ position: "fixed", bottom: bottomOffset + 0,  right: 16 }} />  {/* 主按钮 */}
+<button style={{ position: "fixed", bottom: bottomOffset + 48, right: 16 }} />  {/* 第二按钮 */}
+<button style={{ position: "fixed", bottom: bottomOffset + 96, right: 16 }} />  {/* 第三按钮 */}
+```
+
+**安全区（Safe Area）**
+
+- iOS 横屏：刘海/灵动岛区域使用 `env(safe-area-inset-bottom)`，但**不要**直接把该值加到 `bottomOffset` 上 —— `bottomComposerHeight` 已经包含安全区高度。
+- 桌面浏览器：`bottomOffset` 默认 88 px 已能避开底部任何装饰。
+
 ### 扩展点
 
 1. **支持搜索过滤**：
@@ -368,6 +422,10 @@ useMinimaxTokenPlan 轮询: intervalPercent 从 <100 → 100
    - 实时过滤匹配的消息文本
 
 2. **消息类型图标**：user 消息 / assistant 消息 / tool 调用用不同图标区分
+
+3. **多按钮模式**：按上面"多按钮堆叠模板"接入新的右下角图标
+   - 新按钮必须也接收 `bottomOffset` prop（避免硬编码）
+   - 在 `ChatWindow` 的 `breakpoint === "tablet"` 分支中按顺序堆叠
 
 ---
 
