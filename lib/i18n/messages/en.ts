@@ -115,6 +115,7 @@ export const enLocale: LocalePlugin = {
     "sidebar.changedFiles": "{count} changed files",
     "sidebar.loading": "Loading...",
     "sidebar.noSessions": "No sessions found",
+    "sidebar.noFavorites": "No favorited sessions",
     "sidebar.agentRunning": "Agent running…",
     "sidebar.newActivity": "New activity",
     "sidebar.newSessionActivity": "New session activity",
