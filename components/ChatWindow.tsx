@@ -181,11 +181,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children, t }: { mes
   );
 }
 
-<<<<<<< HEAD
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onSelectedModelChange, onOpenFile }: Props) {
-=======
-export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
->>>>>>> 598c3c6 (feat: play completion sound for tasks finishing in other workspaces (#417))
+export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onSelectedModelChange, onOpenFile, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const breakpoint = useBreakpoint();
@@ -208,7 +204,8 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
   }, [onAgentEnd]);
 
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
-  const handleEditContent = useCallback((content: string) => {
+  const handleEditContent = useCallback((message: UserMessage) => {
+    const content = typeof message.content === "string" ? message.content : "";
     chatInputRef?.current?.insertIfEmpty(content);
   }, [chatInputRef]);
 
@@ -223,12 +220,12 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     agentPhase,
     isNew,
     sessionIdRef, messagesEndRef, scrollContainerRef,
-    lastUserMsgRef, promptAnchorActive,
+    lastUserMsgRef,
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, scrollToBottom, scrollUserMsgToTop,
+    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, scrollToBottom,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
@@ -414,7 +411,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
   }, [error, isEmptyNew, loading, scrollContainerRef, scrollToBottom]);
 
   useLayoutEffect(() => {
-    if (!agentRunning || !promptAnchorActive) {
+    if (!agentRunning) {
       promptAnchorScrollPendingRef.current = false;
       if (promptAnchorSpacerHeightRef.current !== 0) {
         promptAnchorSpacerHeightRef.current = 0;
@@ -454,7 +451,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
 
       if (promptAnchorScrollPendingRef.current) {
         promptAnchorScrollPendingRef.current = false;
-        scrollUserMsgToTop();
+        lastUserMsgRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     };
 
@@ -470,10 +467,8 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     bottomComposerHeight,
     lastUserMsgRef,
     messages.length,
-    promptAnchorActive,
     promptAnchorSpacerHeight,
     scrollContainerRef,
-    scrollUserMsgToTop,
     streamState.streamingMessage,
   ]);
 
