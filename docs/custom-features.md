@@ -309,7 +309,13 @@ useMinimaxTokenPlan 轮询: intervalPercent 从 <100 → 100
 ### 文件清单
 | 文件 | 作用 |
 |------|------|
-| `components/ShortcutsPanel.tsx` | 面板组件 + 模块级注册器 (`setShortcutsPanelOpener`) |
+| `components/ShortcutsPanel.tsx` | 面板组件 + 模块级注册器 (`setShortcutsPanelOpener` / `toggleShortcutsPanel`) |
+| `components/AppShell.tsx` | 集成点：`useState` 持有 `shortcutsOpen`，`useEffect` 注册 opener，JSX 渲染 `<ShortcutsPanel>` |
+| `components/SessionSidebar.tsx` | 侧边栏底部 `?` 按钮 → `toggleShortcutsPanel()` |
+
+### 接入方式
+
+`ShortcutsPanel` 用模块级单例注册表（`openListener`）解耦：组件内部不持有打开状态，由 `AppShell` 注册 opener、`SessionSidebar` 的 `?` 按钮调用 `toggleShortcutsPanel()`。`Esc` 在面板打开时关闭自身。
 
 ### 快捷键清单
 
@@ -620,22 +626,45 @@ AppShell 将 sidebar 开关逻辑从 `useIsMobile` 升级为 `useBreakpoint`，�
 ## 17. 扩展 UI 解析器 (Extension Custom UI Parser)
 
 ### 概述
-解析 agent 返回的 `extension_ui_request` 事件中的自定义 UI 定义（如 select、confirm、input、editor 等交互类型），将其转换为前端可渲染的组件描述对象。
+解析 agent 返回的 `extension_ui_request` 事件中由 Ink TUI 渲染的文本面板（pi-openplan 的 PlanQuestionPrompt 是最常见的使用场景），转成前端可渲染的结构化描述对象。让手机/平板用户可以点按选项，而不是必须敲数字键或打字。
 
 ### 文件清单
 | 文件 | 行数 | 作用 |
 |------|------|------|
-| `lib/extension-custom-ui-parser.ts` | 309 | 解析 extension_ui_request 的 method/options/title/message，生成标准化的 UI 描述对象 |
+| `lib/extension-custom-ui-parser.ts` | 308 | 解析 `request.lines` 为 `{ kind: "options" \| "review" \| "unknown", ... }` |
+| `lib/extension-custom-ui-parser.test.mjs` | — | 24 个单元测试（empty / ANSI / single / multi / description / custom slot / review / tab bar / editing mode） |
+| `components/ChatWindow.tsx` (`ExtensionCustomPanel`) | — | 调用 `parseCustomUi(request.lines)`，按 `kind` 分支渲染：options → tappable list，review → review items，unknown → 保留 raw-text 兜底 |
 
-### 功能
-- 支持解析 `select`（选项列表选择）、`confirm`（确认对话框）、`input`（文本输入）、`editor`（多行编辑）四种交互类型
-- 将 agent 返回的嵌套数据结构扁平化为前端可直接渲染的 `{ type, title, message, options, defaultValue }` 格式
-- 为 `useAgentSession.ts` 中的 `handleExtensionUiRequest()` 提供标准化输入
+### 解析产物（`ParsedCustomUi`）
+
+```typescript
+type ParsedCustomUi =
+  | { kind: "options"; question: string; selectedIndex: number; multiSelect: boolean; items: ParsedOption[] }
+  | { kind: "review"; selectedIndex: number; items: ParsedReviewItem[] }
+  | { kind: "unknown"; reason: string };
+```
+
+| kind | 渲染 | 交互 |
+|---|---|---|
+| `options` | 列表（单/多选） | 单选：tap → `digit + "\r"`；多选：tap → `digit` 切换，底部 Submit → `"\r"`；`isCustom` 行 → focus 隐藏 textarea 让用户输入 |
+| `review` | 列表（每题+答案） | Submit → `"\r"` |
+| `unknown` | 保留原 raw-text 视图 | 桌面键盘 / 隐藏 textarea 照常工作 |
+
+### 已知支持的渲染格式
+
+- 单选：`  1. Label` / `  > 1. Label`（`>` 为 cursor 标记）
+- 多选：`  [ ] Label` / `  [✓] Label` / `  > [ ] Label`（`✓` / `✔` 都视为已勾）
+- 描述：选项下方缩进 6+ 空格的一行
+- 自定义输入槽：`Type your own answer` / `Other` / `Custom answer` / `Your answer` 任何一条都识别为 `isCustom`
+- 编辑模式：custom 槽以 `▌` 或 `_` 结尾时记为 `selectedIndex` + cursor
+- 多题 tab bar：第一行形如 `[Q1] [Q2] Review` 自动剥离
+- Review tab：`  ✓ Q1: answer` 和 `  > Submit` / `  > submit answers` / `  > confirm`（大小写不敏感，词边界防误匹配）
 
 ### 扩展点
-1. **新增交互类型**（如 `slider`、`datepicker`、`multi-select`）：
-   - 在 parser 中加新 method 的解析 case
-   - 在前端加对应的渲染组件
+1. **新增交互类型**（如 `slider`、`datepicker`）：
+   - 在 `ParsedCustomUi` union 加新成员
+   - 在 `parseCustomUi` 加分类分支
+   - 在 `ExtensionCustomPanel` 加新渲染路径
 
 ---
 
