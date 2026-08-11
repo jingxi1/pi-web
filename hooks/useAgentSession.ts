@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useReducer } from "react";
 import type {
   AgentMessage,
   ExtensionStatusItem,
@@ -13,6 +13,7 @@ import type {
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
+import { getPreferredToolPreset } from "@/lib/tool-preset-preference";
 import { emitNotifyEvent } from "@/lib/notify-emitter";
 import { isQuotaError } from "@/lib/quota-error";
 import { autoResumeStore } from "@/lib/auto-resume-store";
@@ -22,6 +23,7 @@ import type { SessionStatsInfo } from "@/lib/pi-types";
 export interface SessionData {
   sessionId: string;
   filePath: string;
+  totalActiveMs: number;
   tree: SessionTreeNode[];
   leafId: string | null;
   context: {
@@ -161,6 +163,10 @@ export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" 
 
 const PROGRAMMATIC_SCROLL_IGNORE_MS = 700;
 const USER_SCROLL_INTENT_MS = 1200;
+// Distance from the bottom of the scroll container within which live-follow
+// scrolling is active. Larger values make follow more lenient; smaller values
+// require the user to stay closer to the bottom.
+const SCROLL_BOTTOM_THRESHOLD = 150;
 const PROMPT_SETTLE_INITIAL_DELAY_MS = 800;
 const PROMPT_SETTLE_POLL_MS = 600;
 const PROMPT_SETTLE_MAX_MS = 20_000;
@@ -400,11 +406,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
+  useLayoutEffect(() => {
+    if (!isNew || sessionIdRef.current) return;
+    setToolPresetState(getPreferredToolPreset());
+  }, [isNew, setToolPresetState]);
+
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
 
   const sessionStats = useMemo(() => {
-    if (sessionStatsOverride) return sessionStatsOverride;
+    if (sessionStatsOverride) {
+      return { ...sessionStatsOverride, totalActiveMs: data?.totalActiveMs };
+    }
     const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
     let cost = 0;
     let userMessages = 0;
@@ -438,9 +451,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       totalMessages: messages.length,
       tokens,
       cost,
+      totalActiveMs: data?.totalActiveMs,
       ...(contextUsage ? { contextUsage } : {}),
     } satisfies SessionStatsInfo;
-  }, [messages, sessionStatsOverride, contextUsage, data?.filePath, session?.id, session?.name]);
+  }, [messages, sessionStatsOverride, contextUsage, data?.filePath, data?.totalActiveMs, session?.id, session?.name]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
     let messagesLoaded = false;
