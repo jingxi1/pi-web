@@ -1,27 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
-  isApiRequestAllowed,
-  isApiRequestHostAllowed,
-} from "@/lib/request-security";
-import {
   isValidBasicAuthorization,
   isWebPasswordEnabled,
 } from "@/lib/web-auth";
 
+// Trust domain check removed 2026-08-28 by Q (user request "走A").
+// Upstream v0.8.11 added isApiRequestAllowed / isApiRequestHostAllowed via
+// proxy.ts; those gate browser requests on Origin + sec-fetch-site and were
+// blocking UI access to /api (model panel etc.) from non-allowlist hostnames
+// while CLI/SDK calls (no Origin header) still worked. We keep only the
+// optional Basic Auth gate below.
 export function proxy(request: NextRequest) {
-  const isApiRequest = request.nextUrl.pathname === "/api"
-    || request.nextUrl.pathname.startsWith("/api/");
-  const isTrustedRequest = isApiRequest
-    ? isApiRequestAllowed(request)
-    : isApiRequestHostAllowed(request);
-
-  if (!isTrustedRequest) {
-    if (!isApiRequest) {
-      return new NextResponse("Untrusted request", { status: 403 });
-    }
-    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
-  }
-
   const password = process.env.PI_WEB_PASSWORD;
   if (
     isWebPasswordEnabled(password)
