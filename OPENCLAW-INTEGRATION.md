@@ -200,12 +200,12 @@ OpenClawIntegration 不能往 AppShell 的 toolbar 里直接加按钮（因为 A
 两种解法：
 
 **方案 A：Portal（推荐）**  
-OpenClawIntegration 用 `createPortal` 把按钮渲染到 AppShell 的 toolbar DOM 节点（通过 `document.querySelector('[data-app-toolbar]')` 或 context API）。
+OpenClawIntegration 用 `createPortal` 把按钮渲染到 AppShell 的 toolbar DOM 节点（通过 `document.querySelector('[data-app-tools-slot]')`）。
 
-**方案 B：位置约定**  
-AppShell 在 toolbar 里预留一个 `<div id="openclaw-toolbar-slot" />`，OpenClawIntegration 在这个 slot 里渲染按钮。AppShell 不知道里面是什么。
+**方案 B：位置约定（当前实现）**  
+AppShell 在顶栏预留一个中立槽 `<div data-app-tools-slot />`（桌面顶栏与移动端工具栏各一处），OpenClawIntegration 往里 `createPortal` 一个「工具」下拉菜单（通知 / 任务 / 终端）。AppShell 不知道槽里是什么。
 
-**当前实现**：方案 B 更简单，等真正冲突再升级到方案 A。
+> **注意**：槽位 `id/attr` 用中性名（`data-app-tools-slot`），**不要带 `openclaw` 字样**，否则 §6 的 `grep -n openclaw components/AppShell.tsx` 自检会误报「不止 1 行」。
 
 ---
 
@@ -333,7 +333,7 @@ review 一个涉及 OpenClaw 的 PR 时：
 
 - [x] OpenClaw 特性从 AppShell 抽离 → ✅ 已完成（`openclaw-integration.tsx`）
 - [x] OpenClawIntegration 文件创建 → ✅ 已完成
-- [x] AppShell 的 toolbar slot（方案 B）→ ✅ 已完成（`id="openclaw-toolbar-slot"`）
+- [x] AppShell 的 toolbar slot（方案 B）→ ✅ 已完成（中立槽 `data-app-tools-slot`）
 - [x] TokenPlanBar 驱动 providerId → ✅ 已完成（`providerId` prop 从 AppShell 传入）
 - [ ] 组件文件移至 `components/openclaw/` 子目录 → 可选优化（当前组件在 `components/` 根目录，不影响 AppShell 集成）
 - [ ] 更新 `custom-features.md` §5 功能清单表格（记录新 commit）
@@ -346,3 +346,4 @@ review 一个涉及 OpenClaw 的 PR 时：
 |------|------|------|
 | 2026-07-29 | 创建本文档 | v0.7→0.8 升级痛点驱动 |
 | 2026-08-01 | §9 TODO 全部完成（抽离到 openclaw-integration.tsx） | AppShell 升级不再丢 OpenClaw 代码 |
+| 2026-09-04 | 「通知/任务/终端」移入顶栏「工具」下拉菜单；AppShell 加中立槽 `data-app-tools-slot`（桌面+移动端各一），OpenClawIntegration 用 portal 挂载 | 右缘竖向条改为顶栏访问入口 |

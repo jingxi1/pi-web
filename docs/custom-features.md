@@ -55,7 +55,7 @@
 | `lib/notify-config.ts` | 读写 `~/.pi/agent/notify.json` |
 | `lib/notify-types.ts` | 类型定义、默认值、验证、密码剥离 |
 | `lib/notify-emitter.ts` | 客户端事件总线（emit / onNotifyEvent） |
-| `lib/email-sender.ts` | nodemailer 封装的 createTransport / sendMail / verify |
+| `lib/email-sender.ts` | nodemailer 封装的 createTransport / sendMail / verify / sendTestEmail |
 | `hooks/useNotify.ts` | React hook：监听 notify-emitter 事件 → POST /api/notify/dispatch |
 
 ### 数据流
@@ -145,6 +145,17 @@ lib/scheduled-tasks-scheduler.ts
   ↓   writeTasks() 记录结果
 ```
 
+### 任务表单（工作目录 / 指定模型）
+
+创建/编辑表单与系统整体体验对齐，两个关键字段不再手填：
+
+- **工作目录 (cwd)**：不再是自由文本输入，改为
+  - 「浏览…」按钮 → 打开系统 `DirectoryPicker`（复用 `/api/cwd/browse` 文件浏览器，portal 覆盖在弹窗之上）
+  - 「已存在目录」下拉：选项来自新增的 `GET /api/cwd/known-roots`（聚合各 session cwd / projectRoot + `~/.pi/pi-cwd-*` + additional roots 的 `getAllowedFileRoots()`），选中即回填；下拉含「（默认目录，清空）」项恢复 `cwd:""`=默认语义
+- **指定模型 (model)**：勾选 `useModel` 后直接用系统统一 `ModelSelector`（`variant="field"`，options 来自 `/api/models` 的 modelList，按 provider 分组 + 可过滤），不再用硬编码 `PROVIDERS` 下拉 + 手输 modelId；「默认模型」= `onClear` 清空 provider/modelId
+
+底层字段不变量：仍走 `TaskFormState` 的 `cwd/provider/modelId/useModel`，`taskToForm` / `handleSaveForm` 与 `lib/scheduled-tasks-runner.ts` / `types` 均未改动。
+
 ### 扩展点
 
 1. **新增调度类型**（如 `weekday`、`monthly`）：
@@ -232,6 +243,8 @@ useMinimaxTokenPlan 轮询: intervalPercent 从 <100 → 100
 - **SIGKILL 升级**：macOS 上 `&`-backgrounded 子进程的 SIGHUP 不生效时，1.5s 后升级 SIGKILL
 - **滚动缓冲**：200 KB 环状 scrollback（chunked array 避免大 string 拼接导致事件循环阻塞）
 - **CRT 主题**：绿色 (#7cfc00) 前景 + 琥珀色 (#ffb000) 光标 + 黑色 (#0a0e0a) 背景
+- **自适应尺寸**：面板 `width: min(92vw, 880px)` × `height: min(78vh, 620px)`，body 用 `flex:1` 撑满，宽屏下足够可用（不再固定过窄）
+- **字体跟随主题**：xterm 实例 `fontFamily: "var(--font-mono)"`，与全局 UI 的 Noto Sans Mono / JetBrains Mono 等宽堆栈一致（而非默认 raw monospace）
 - **Ctrl+Shift+C / V**：复制/粘贴（通过 Clipboard API）
 - **进程退出后交互**：Enter → 重启 shell；其他键 → 关闭 tab
 - **SSE 重连**：EventSource 自动重连 + `replay: true` 标记硬重置屏幕
@@ -605,20 +618,30 @@ toast.dismiss("t1")
 
 ### 设计原则
 
-1. **单一接缝面**：AppShell.tsx 只含一行 `import { OpenClawIntegration } from "./openclaw-integration"` + `<OpenClawIntegration />`
+1. **单一接缝面**：AppShell.tsx 只含一行 `import { OpenClawIntegration } from "./openclaw-integration"` + `<OpenClawIntegration />`，外加一个**中立占位槽** `<div data-app-tools-slot />`（无 `openclaw` 字符串、不 import 任何 OpenClaw 组件，仅仅是一个空白挂载点）
 2. **自包含特性**：每个特性 = 一个 component + 一个 API 路由族，对外只暴露 prop 接口
-3. **不接触 upstream 内部**：不修改 AppShell、SessionSidebar、ChatInput 等上游核心文件来加 OpenClaw 逻辑
+3. **不接触 upstream 内部**：不修改 AppShell、SessionSidebar、ChatInput 等上游核心文件来加 OpenClaw 逻辑（顶栏槽位是唯一的 #2 例外，AppShell 不知道槽里是什么）
 4. **公私分明**：`openclaw-integration.tsx` 是唯一对 AppShell 可见的导入点
+
+### 工具栏布局（顶栏「工具」下拉菜单）
+
+`openclaw-integration.tsx` 把「通知 / 任务 / 终端」三个入口放进**顶栏的「工具」下拉菜单**：
+
+- AppShell 顶栏预留一个**中立占位槽** `<div data-app-tools-slot />`（桌面顶栏与移动端工具栏各一处，AppShell 不知道里面是什么，无 `openclaw` 字符串、不 import 任何 OpenClaw 组件，保持接缝面）
+- `openclaw-integration.tsx` 用 `createPortal` 把「工具」按钮（grid 图标 + 文字）挂进该槽，按钮样式与其它顶栏按钮一致（hover/选中高亮、`borderTop: accent` 2px）
+- 点击「工具」展开下拉菜单（`通知 / 任务 / 终端`）；点任一菜单项关闭菜单并打开对应模态；点击菜单外区域关闭
+- 用 `mounted` state（`useEffect` 置 true）gating portal，确保 SSR/首屏两个阶段都不渲染 portal，避免 hydration mismatch
+- 菜单 `position: absolute; top:100%` 锚定在按钮下方、右对齐，zIndex 900（低于模态遮罩 1200/1000），不打乱 AppShell 结构
 
 ### 当前集成状态
 
 | 特性 | 集成方式 | 已模块化 |
 |------|----------|----------|
-| NotifyConfig | `createPortal` 注入 toolbar slot | ✅ component 级别 |
-| ScheduledTasksConfig | `createPortal` 注入 toolbar slot | ✅ component 级别 |
+| NotifyConfig | 顶栏「工具」菜单 → portal 模态 | ✅ component 级别 |
+| ScheduledTasksConfig | 顶栏「工具」菜单 → portal 模态 | ✅ component 级别 |
 | MinimaxTokenPlanBar | inline 渲染 | ✅ component 级别 |
 | 收藏会话 | SessionSidebar 内嵌 | ⚠️ 待抽取 |
-| 终端 | 独立页面/FileViewer 内 | ✅ 独立功能 |
+| 终端 | 顶栏「工具」菜单 → 全屏 overlay | ✅ 独立功能 |
 
 ---
 
@@ -1082,6 +1105,7 @@ flowchart LR
 | `app/api/diag/node-pty/route.ts` | 65 | PTY 诊断 |
 | `app/api/models-config/catalog/route.ts` | 78 | 价格预设 |
 | `app/api/models-config/discover/route.ts` | 88 | 上游模型发现 |
+| `app/api/cwd/known-roots/route.ts` | 15 | 已知/允许目录清单 |
 
 ### 新增 lib 模块
 
@@ -1118,7 +1142,7 @@ flowchart LR
 | `components/ShortcutsPanel.tsx` | 222 | 快捷键面板 |
 | `components/ChatMinimapFab.tsx` | 224 | 消息快速跳转 |
 | `components/Toast.tsx` | 285 | Toast 组件 |
-| `components/openclaw-integration.tsx` | 119 | OpenClaw 集成边界 |
+| `components/openclaw-integration.tsx` | 232 | OpenClaw 集成边界（顶栏「工具」菜单 + modals + TokenPlanBar） |
 | `components/PwaRegistration.tsx` | 33 | PWA 注册组件 |
 
 ### 新增 hooks
@@ -1160,6 +1184,19 @@ flowchart LR
 | `openclaw-integration.tsx` | 创建独立组件：Notify/Tasks 按钮通过 `createPortal` 注入 AppShell toolbar slot，modals 和 TokenPlanBar 在内部渲染 |
 | `AppShell.tsx` | 删除重复的 `<MinimaxTokenPlanBar>` 渲染和 import，改为 `<OpenClawIntegration providerId={currentProviderId} />` |
 | `OPENCLAW-INTEGRATION.md` | §5 功能清单状态全部改为 ✅，§9 TODO 全部完成 |
+
+---
+
+### 28.6 本次调整（2026-09-04）
+
+| 变更 | 说明 |
+|------|------|
+| `openclaw-integration.tsx` | 修复 hydration mismatch（`mounted` state gating portal）；「通知/任务/终端」改为顶栏「工具」下拉菜单（复用 AppShell 中立槽 `data-app-tools-slot`，不再用右缘条） |
+| `components/TerminalView.tsx` | 终端面板加自适应尺寸 `min(92vw,880px)` × `min(78vh,620px)`、body `flex:1`；字体改为 `var(--font-mono)` 与全局一致 |
+| `components/ScheduledTasksConfig.tsx` | 任务表单改造：cwd 用 `DirectoryPicker`（浏览…）+「已存在目录」下拉；模型用系统统一 `ModelSelector`（`variant="field"`）；删除硬编码 `PROVIDERS` 常量 |
+| `app/api/cwd/known-roots/route.ts` | **新增** `GET /api/cwd/known-roots` → `{ roots: string[] }`，供目录快捷选择 |
+| `lib/terminal-manager.ts` | `resolveCwd()`：空/缺失 cwd 现在 fallback 到 `WORKSPACE_DIR`/`$HOME`，不再返回 400（贴合 §24.4 契约） |
+| `app/api/notify/test/route.ts` + `lib/email-sender.ts` | 新增「发送测试邮件」：`sendTestEmail()` 发真实样例邮件（标题 `[前缀] 测试邮件`），`POST /api/notify/test` 支持 `send:true`；UI 加「发送测试邮件」按钮，「测试连接」改为测试当前表单值 |
 
 ---
 
@@ -1232,15 +1269,29 @@ interface DispatchRequest {
 #### `POST /api/notify/test`
 
 ```typescript
-// Request: 无 body，使用已保存的配置
+// Request body（可选）
+interface NotifyTestRequest {
+  send?: boolean;        // true = 发送一封真实测试邮件；缺省/false = 仅验证 SMTP 连接
+  config?: {             // 当前表单覆盖值（用于测试正在编辑的内容）
+    smtp?: Partial<NotifySmtpConfig>;
+    from?: string;
+    to?: string;
+    subjectPrefix?: string;
+  };
+  // 合并规则：config.smtp.pass 为空串 → 使用已保存的密码
+}
 
-// Response 200
+// Response 200 — verify
 { ok: true }
+// Response 200 — send
+{ ok: true, sent: true, to: string }
 // Response 400
 { error: string }  // SMTP 配置不完整
 // Response 500
-{ error: string }  // SMTP 连接失败
+{ error: string }  // SMTP 连接失败 / 发送失败
 ```
+
+> `send:true` 调用 `sendTestEmail()` 发出标题如 `[前缀] 测试邮件`、含发送时间/发送方的样例邮件，用于验证端到端投递（不再只做 SMTP 握手）。UI 中「测试连接」= verify，「发送测试邮件」= send。
 
 ---
 
@@ -1360,7 +1411,7 @@ interface CreateTaskResponse {
 ```typescript
 // Request body
 interface CreateTerminalRequest {
-  cwd: string;       // 必填。不存在时自动 fallback 到 /workspace / $HOME
+  cwd: string;       // 可省略。空/缺失/不存在时自动 fallback 到 WORKSPACE_DIR / $HOME（不再返回 400）
   cols?: number;     // 默认 120
   rows?: number;     // 默认 30
 }
@@ -1518,6 +1569,24 @@ interface DiagResponse {
 
 // Response 500 (node-pty 未安装)
 { ok: false, error: "node-pty not installed" }
+```
+
+---
+
+### 24.7 已知目录 API
+
+#### `GET /api/cwd/known-roots`
+
+返回系统当前允许/已知的目录（各 session cwd、projectRoot、`~/.pi/pi-cwd-*` 与 additional roots 的并集），供定时任务表单等场景「快捷选择已有目录」。
+
+```typescript
+// Response 200
+interface GetKnownRootsResponse {
+  roots: string[];   // 排序后的绝对路径列表（getAllowedFileRoots() 展开）
+}
+
+// Response 500
+{ error: string }  // getAllowedFileRoots 异常
 ```
 
 ---
@@ -1784,4 +1853,4 @@ node_modules/.bin/tsc --noEmit
 | v1.1 (完整) | `f152945` | 接口契约 + CSS 清单 + 测试策略 + 全局变量 | 1362 |
 | v1.2 (更新) | HEAD (`59995c9`) | +PWA + 模型发现 + 上游 v0.8.3/0.8.4 合并变更 | ~1430 |
 
-> **最后更新**: 2026-08-01 | 覆盖到 HEAD (`59995c9`) | 总行数: 待统计
+> **最后更新**: 2026-09-04 | 覆盖到 HEAD + 本次调整（顶栏「工具」菜单、终端尺寸/字体、定时任务表单、known-roots API、resolveCwd fallback） | 总行数: 待统计

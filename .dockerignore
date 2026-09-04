@@ -1,0 +1,12 @@
+node_modules
+.next
+*.log
+.git
+.gitignore
+.gitlab-ci.yml
+docs
+.claude
+.env
+.env.*
+tsconfig.json
+# keep next.config.ts, package.json, package-lock.json, public/ etc.

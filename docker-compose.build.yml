@@ -1,0 +1,9 @@
+# Build-only compose file: produces the image without starting a container.
+services:
+  pi-tools:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_PIWEB_VERSION: ${NEXT_PUBLIC_PIWEB_VERSION:-0.8.11}
+        NEXT_PUBLIC_PI_TOOLS_VERSION: ${NEXT_PUBLIC_PI_TOOLS_VERSION:-0.8.11}
+    image: pi-tools:latest

@@ -1,0 +1,32 @@
+services:
+  pi-tools:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_PIWEB_VERSION: ${NEXT_PUBLIC_PIWEB_VERSION:-0.8.11}
+        NEXT_PUBLIC_PI_TOOLS_VERSION: ${NEXT_PUBLIC_PI_TOOLS_VERSION:-0.8.11}
+    image: pi-tools:latest
+    container_name: pi-tools
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - PI_WEB_HOSTNAME=${PI_WEB_HOSTNAME:-}
+      - PI_WEB_PASSWORD=${PI_WEB_PASSWORD:-}
+      - PI_WEB_ALLOWED_HOSTS=${PI_WEB_ALLOWED_HOSTS:-}
+      - PI_WEB_SKIP_VERSION_CHECK=${PI_WEB_SKIP_VERSION_CHECK:-}
+      - PI_CODING_AGENT_DIR=/data/pi-agent
+      - WORKSPACE_DIR=/workspace
+      - GH_TOKEN=${GH_TOKEN:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - SKILLS_API_URL=${SKILLS_API_URL:-}
+      - MINIMAX_CN_API_KEY=${MINIMAX_CN_API_KEY:-}
+    volumes:
+      - pi-agent-data:/data/pi-agent
+      - pi-workspace:/workspace
+      - pi-config:/root/.config
+volumes:
+  pi-agent-data:
+  pi-workspace:
+  pi-config:

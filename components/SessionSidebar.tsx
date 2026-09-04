@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { listSessionFamilies } from "@/lib/session-family";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
@@ -74,6 +75,49 @@ function ToolbarIconButton({
       }}
       onMouseEnter={enter}
       onMouseLeave={leave}
+    >
+      {children}
+    </button>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: 1,
+        height: 26,
+        padding: "0 8px",
+        background: active ? "var(--bg-selected)" : "transparent",
+        border: "none",
+        borderRadius: 6,
+        color: active ? "var(--text)" : "var(--text-muted)",
+        cursor: "pointer",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: "0.02em",
+        transition: "background 0.12s, color 0.12s",
+      }}
+      onMouseEnter={(e) => {
+        if (active) return;
+        e.currentTarget.style.background = "var(--bg-hover)";
+        e.currentTarget.style.color = "var(--text)";
+      }}
+      onMouseLeave={(e) => {
+        if (active) return;
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.color = "var(--text-muted)";
+      }}
     >
       {children}
     </button>
@@ -182,6 +226,71 @@ function saveUnreadSessionIds(ids: Set<string>): void {
   } catch {
     // ignore storage quota / privacy-mode errors
   }
+}
+
+// ── Favorites store (localStorage-backed, module-level cache) ──────────────
+const FAVORITES_STORAGE_KEY = "pi-favorites-v1";
+
+let favoritesCache: Set<string> | null = null;
+let favoritesVersion = 0;
+const favoritesListeners = new Set<() => void>();
+
+function loadFavorites(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === "string"));
+    return new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function getFavorites(): Set<string> {
+  if (!favoritesCache) favoritesCache = loadFavorites();
+  return favoritesCache;
+}
+
+function persistFavorites(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...getFavorites()]));
+  } catch {
+    // ignore storage quota / privacy-mode errors
+  }
+}
+
+function setFavorite(id: string, favorite: boolean): void {
+  const ids = getFavorites();
+  if (favorite === ids.has(id)) return;
+  if (favorite) ids.add(id);
+  else ids.delete(id);
+  persistFavorites();
+  favoritesVersion += 1;
+  favoritesListeners.forEach((cb) => cb());
+}
+
+function toggleFavorite(id: string): void {
+  setFavorite(id, !getFavorites().has(id));
+}
+
+function hasFavorite(id: string): boolean {
+  return getFavorites().has(id);
+}
+
+function listFavorites(): string[] {
+  return [...getFavorites()];
+}
+
+function subscribeFavorites(cb: () => void): () => void {
+  favoritesListeners.add(cb);
+  return () => { favoritesListeners.delete(cb); };
+}
+
+function getFavoritesVersion(): number {
+  return favoritesVersion;
 }
 
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
@@ -353,6 +462,9 @@ function PiWebTitle() {
 
 export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
   const { t } = useI18n();
+  const breakpoint = useBreakpoint();
+  const [sidebarTab, setSidebarTab] = useState<"sessions" | "favorites">("sessions");
+  const favoritesTick = useSyncExternalStore(subscribeFavorites, getFavoritesVersion, () => 0);
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -949,7 +1061,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
       : null);
 
-  const sessionFamilies = listSessionFamilies(filteredSessions);
+  const sessionFamilies = useMemo(
+    () => listSessionFamilies(filteredSessions),
+    [filteredSessions],
+  );
+
+  // Favorites tab shows a flat, project-independent list of favorited sessions.
+  const favoriteSessions = useMemo(() => {
+    const byId = new Map(allSessions.map((s) => [s.id, s]));
+    return listFavorites()
+      .map((id) => byId.get(id))
+      .filter((s): s is SessionInfo => s !== undefined && !s.transient);
+  }, [allSessions, favoritesTick]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -968,7 +1091,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       {/* Header */}
       <div
         style={{
-          padding: "12px 10px 10px",
+          padding: breakpoint === "mobile" ? "8px 8px 8px" : "12px 10px 10px",
           borderBottom: "1px solid var(--border)",
           flexShrink: 0,
         }}
@@ -1614,6 +1737,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
+      {/* Sessions / Favorites tabs */}
+      <div style={{ display: "flex", gap: 4, padding: "4px 8px 6px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <TabButton active={sidebarTab === "sessions"} onClick={() => setSidebarTab("sessions")}>
+          {t("sidebar.sessions")}
+        </TabButton>
+        <TabButton active={sidebarTab === "favorites"} onClick={() => setSidebarTab("favorites")}>
+          {t("sidebar.favorites")}
+        </TabButton>
+      </div>
+
       {/* Session list */}
       <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
         {loading && (
@@ -1626,12 +1759,37 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {error}
           </div>
         )}
-        {!loading && !error && sessionFamilies.length === 0 && (
+        {!loading && !error && sidebarTab === "favorites" && (
+          favoriteSessions.length === 0 ? (
+            <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
+              {t("sidebar.noFavorites")}
+            </div>
+          ) : (
+            favoriteSessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                isSelected={session.id === selectedSessionId}
+                isRunning={runningSessionIds.has(session.id)}
+                isUnread={unreadSessionIds.has(session.id)}
+                isFavorite={hasFavorite(session.id)}
+                onToggleFavorite={() => toggleFavorite(session.id)}
+                onClick={() => handleSelectSessionFromList(session)}
+                onRenamed={loadSessions}
+                onDeleted={(id) => {
+                  onSessionDeleted?.(id);
+                  loadSessions();
+                }}
+              />
+            ))
+          )
+        )}
+        {!loading && !error && sidebarTab === "sessions" && sessionFamilies.length === 0 && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.noSessions")}
           </div>
         )}
-        {sessionFamilies.map((family) => {
+        {sidebarTab === "sessions" && sessionFamilies.map((family) => {
           const familySessions = [family.root, ...family.subagents];
           const displaySession = family.latestModified === family.root.modified
             ? family.root
@@ -1643,6 +1801,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               isSelected={familySessions.some((session) => session.id === selectedSessionId)}
               isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
               isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+              isFavorite={hasFavorite(family.root.id)}
+              onToggleFavorite={() => toggleFavorite(family.root.id)}
               onClick={() => handleSelectSessionFromList(family.root)}
               onRenamed={loadSessions}
               onDeleted={(id) => {
@@ -1904,6 +2064,8 @@ function SessionItem({
   isSelected,
   isRunning,
   isUnread,
+  isFavorite,
+  onToggleFavorite,
   onClick,
   onRenamed,
   onDeleted,
@@ -1916,6 +2078,8 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
@@ -1980,6 +2144,7 @@ function SessionItem({
     setDeleting(true);
     try {
       await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+      setFavorite(session.id, false);
       onDeleted?.(session.id);
     } catch {
       setDeleting(false);
@@ -2142,6 +2307,16 @@ function SessionItem({
               </span>
             </div>
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
+              {isRunning && (
+                <img
+                  src="/icons/icon-192.png"
+                  width={16}
+                  height={16}
+                  alt={t("sidebar.agentRunning")}
+                  title={t("sidebar.agentRunning")}
+                  style={{ borderRadius: 3, flexShrink: 0 }}
+                />
+              )}
               {isRunning ? (
                 <RunningSessionIndicator />
               ) : isUnread ? (
@@ -2190,6 +2365,42 @@ function SessionItem({
           {/* Action buttons — shown on hover */}
           {hovered && !session.transient && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite?.();
+                }}
+                title={t(isFavorite ? "sidebar.unfavorite" : "sidebar.favorite")}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 32, height: 32, padding: 0,
+                  background: isFavorite ? "rgba(245,158,11,0.12)" : "var(--bg-hover)",
+                  border: `1px solid ${isFavorite ? "rgba(245,158,11,0.4)" : "var(--border)"}`,
+                  borderRadius: 7,
+                  color: isFavorite ? "#f59e0b" : "var(--text-muted)",
+                  cursor: "pointer", flexShrink: 0,
+                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-selected)";
+                  e.currentTarget.style.color = "#f59e0b";
+                  e.currentTarget.style.borderColor = "rgba(245,158,11,0.4)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = isFavorite ? "rgba(245,158,11,0.12)" : "var(--bg-hover)";
+                  e.currentTarget.style.color = isFavorite ? "#f59e0b" : "var(--text-muted)";
+                  e.currentTarget.style.borderColor = isFavorite ? "rgba(245,158,11,0.4)" : "var(--border)";
+                }}
+              >
+                <svg
+                  width="15" height="15" viewBox="0 0 24 24"
+                  fill={isFavorite ? "#f59e0b" : "none"}
+                  stroke={isFavorite ? "#f59e0b" : "currentColor"}
+                  strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+                >
+                  <path d="M12 17.3 5.8 20.5l1.2-6.9L2.2 8.2l6.9-1L12 1l2.9 6.2 6.9 1-4.8 5.4 1.2 6.9z" />
+                </svg>
+              </button>
               <button
                 onClick={startRename}
                 title={t("sidebar.rename")}

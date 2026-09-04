@@ -1421,3 +1421,123 @@ span.token.table {
     font-size: 16px !important;
   }
 }
+
+/* =====================================================================
+ * §25 fork custom-features: keyframes + classes + breakpoints
+ * ===================================================================== */
+
+@keyframes code-copy-pulse {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.86); }
+  100% { transform: scale(1); }
+}
+.markdown-code-action.is-copied { animation: code-copy-pulse 0.4s ease-out; }
+
+@keyframes skeleton-shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: 200px 0; }
+}
+.skeleton-line {
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg-hover) 25%, color-mix(in srgb, var(--bg-hover) 40%, var(--bg-panel)) 50%, var(--bg-hover) 75%);
+  background-size: 400px 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes quick-start-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.quick-start-card { animation: quick-start-in 0.3s ease-out both; }
+
+@keyframes scroll-fab-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.scroll-fab-enter { animation: scroll-fab-in 0.2s ease-out both; }
+
+@keyframes scroll-fab-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(16px) scale(0.9); }
+}
+.scroll-fab-exit { animation: scroll-fab-out 0.2s ease-in both; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(24px); }
+}
+.toast-host-anim.toast-enter { animation: toast-in 0.22s ease-out both; }
+.toast-host-anim.toast-exit { animation: toast-out 0.2s ease-in both; }
+
+@keyframes shortcuts-panel-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.shortcuts-panel-backdrop { animation: shortcuts-panel-in 0.18s ease-out both; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.spin-loop { animation: spin 0.9s linear infinite; transform-origin: center; }
+
+/* Tool-call collapsible */
+.tool-call-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease;
+}
+.tool-call-body.is-expanded { grid-template-rows: 1fr; }
+.tool-call-body-inner { min-height: 0; overflow: hidden; }
+
+/* Icon tooltip via data-tooltip */
+.pi-tooltip { position: relative; }
+.pi-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 999;
+}
+.pi-tooltip:hover::after { opacity: 1; }
+
+/* Terminal CRT theme */
+.terminal-crt {
+  background: #0a0e0a;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(124, 252, 0, 0.03) 0px,
+    rgba(124, 252, 0, 0.03) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+.terminal-crt .xterm-screen canvas {
+  filter: drop-shadow(0 0 2px rgba(124, 252, 0, 0.35));
+}
+.terminal-crt .xterm-cursor-layer .xterm-cursor {
+  filter: drop-shadow(0 0 4px rgba(255, 176, 0, 0.6));
+}
+
+/* --- §25.3 breakpoint adjustments --- */
+@media (min-width: 1024px) {
+  .sidebar-overlay-backdrop { display: none !important; }
+}
+@media (max-width: 1023px) and (min-width: 768px) {
+  .sidebar-container { width: 320px; }
+}

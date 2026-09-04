@@ -24,7 +24,11 @@ import {
 } from "@/lib/file-fuzzy";
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { useI18n } from "@/hooks/useI18n";
+import { listPending, cancel as cancelAutoResume, type AutoResumeEntry } from "@/lib/auto-resume-store";
+import { formatRemainingSeconds } from "@/lib/time-format";
 import type { ToolPreset } from "@/lib/tool-presets";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
 
@@ -77,6 +81,8 @@ interface Props {
   draftKey?: string;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
+  /** Session id — used to match the auto-resume pending entry for its banner. */
+  sessionId?: string | null;
 }
 
 export interface ChatInputHandle {
@@ -445,9 +451,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onPromptWithStreamingBehavior,
   draftKey,
   cwd,
+  sessionId,
 }: Props, ref) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
+  const breakpoint = useBreakpoint();
+  const keyboardInset = useKeyboardInset();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [toolDropdownOpen, setToolDropdownOpen] = useState(false);
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
@@ -1395,6 +1404,27 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
 
+  // Auto-resume countdown: refresh the pending entry for this session each second.
+  const [pendingResume, setPendingResume] = useState<AutoResumeEntry | undefined>();
+  useEffect(() => {
+    if (!sessionId) {
+      setPendingResume(undefined);
+      return;
+    }
+    const refresh = () =>
+      setPendingResume(listPending().find((e) => e.sessionId === sessionId));
+    refresh();
+    const id = window.setInterval(refresh, 1000);
+    return () => window.clearInterval(id);
+  }, [sessionId]);
+  const resumeRemaining = pendingResume
+    ? Math.max(0, Math.ceil((pendingResume.wakesAt - Date.now()) / 1000))
+    : 0;
+  const resumeLabel =
+    pendingResume && resumeRemaining > 0
+      ? `额度将在 ${formatRemainingSeconds(resumeRemaining)} 后重置，回复已排队自动重发`
+      : `额度已重置，回复已排队自动重发`;
+
 
 
   return (
@@ -1403,7 +1433,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         flexShrink: 0,
         background: "transparent",
         padding: "0 16px 8px",
-        paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
+        paddingRight: breakpoint === "desktop" ? 52 : 16, // desktop: 16px base + 36px for ChatMinimap alignment
+        paddingBottom: keyboardInset > 0 ? keyboardInset + 8 : 8,
       }}
     >
       {/* Hidden file input */}
@@ -1412,6 +1443,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         type="file"
         accept="image/*"
         multiple
+        capture={isMobile ? "environment" : undefined}
         style={{ display: "none" }}
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
@@ -1420,6 +1452,35 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }}
       />
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
+        {pendingResume && (
+          <div style={{
+            marginBottom: 8,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-panel)",
+            padding: "6px 10px",
+            fontSize: 13,
+          }}>
+            <span style={{ color: "var(--text-muted)", flex: 1 }}>{resumeLabel}</span>
+            <button
+              onClick={() => sessionId && cancelAutoResume(sessionId)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 13,
+                flexShrink: 0,
+              }}
+              title="取消自动重发"
+            >
+              取消
+            </button>
+          </div>
+        )}
         <ModelErrorBanner error={modelError} />
         <ModelScopeWarningBanner warnings={modelScopeWarnings} />
         {/* Queued steering / follow-up messages (delivered by pi on upcoming turns) */}

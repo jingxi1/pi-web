@@ -9,9 +9,12 @@ import { extractTurnWrittenFiles, type WrittenFile } from "@/lib/turn-written-fi
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { ChatMinimapFab, type MinimapMessage } from "./ChatMinimapFab";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { parseCustomUi } from "@/lib/extension-custom-ui-parser";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -256,7 +259,20 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
 export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
+  const breakpoint = useBreakpoint();
   const completionNotificationsEnabled = session?.relation?.kind !== "subagent";
+
+  // Tablet-only ChatMinimapFab legs off the actual composer height so it never
+  // overlaps the composer (FAB bottom = composer height + 8).
+  const composerHeightRef = useRef<HTMLDivElement | null>(null);
+  const [bottomComposerHeight, setBottomComposerHeight] = useState(80);
+  useEffect(() => {
+    const el = composerHeightRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setBottomComposerHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Wrap onAgentEnd to play the completion sound. This is more reliable than
   // wrapping handleAgentEventRef because useAgentSession overwrites that ref
@@ -442,6 +458,43 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     return history.reverse();
   }, [messages]);
   const messageRefs = useMessageRefs(visibleMessages.length);
+  const minimapMessages = useMemo<MinimapMessage[]>(() => {
+    let refIndex = 0;
+    const out: MinimapMessage[] = [];
+    for (let idx = 0; idx < messages.length; idx++) {
+      const msg = messages[idx];
+      if (msg.role !== "user" && msg.role !== "assistant") continue;
+      const preview = msg.role === "user"
+        ? (getUserInputText(msg) ?? "")
+        : getDisplayableAssistantBlocks(msg as AssistantMessage)
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("\n");
+      out.push({ id: String(idx), preview: preview.slice(0, 120), isUser: msg.role === "user" });
+      refIndex++;
+    }
+    return out;
+  }, [messages]);
+  // Scroll the target message into view (id = index into `messages`).
+  const jumpToMsgId = useCallback((id: string) => {
+    const target = Number(id);
+    if (!Number.isFinite(target)) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    let refIndex = 0;
+    for (let i = 0; i < target && i < messages.length; i++) {
+      const m = messages[i];
+      if (m && (m.role === "user" || m.role === "assistant")) refIndex++;
+    }
+    const el = messageRefs.current[refIndex];
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const c = container.getBoundingClientRect();
+    container.scrollTo({
+      top: Math.max(0, container.scrollTop + (r.top - c.top) - container.clientHeight * 0.3),
+      behavior: "smooth",
+    });
+  }, [messages, messageRefs, scrollContainerRef]);
   const revealHistoryForMinimap = useCallback(() => {
     setVisibleCount((current) => Math.max(current, messages.length * 2));
   }, [messages.length]);
@@ -597,6 +650,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
       onAudioUnlock={unlockAudio}
       draftKey={session?.id ?? newSessionDraftKey ?? undefined}
       cwd={session?.cwd ?? newSessionCwd}
+      sessionId={session?.id ?? undefined}
     />
   );
 
@@ -709,10 +763,13 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
                 <NewSessionUpdateLink label={(version) => t("appUpdate.releaseNotes", { version })} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  web <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}</span>
+                <span className="quick-start-card" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  PiWeb <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PIWEB_VERSION ?? "0.0.0"}</span>
                 </span>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                <span className="quick-start-card" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  PiTools <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PI_TOOLS_VERSION ?? "0.0.0"}</span>
+                </span>
+                <span className="quick-start-card" style={{ fontSize: 11, color: "var(--text-muted)" }}>
                   pi <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}</span>
                 </span>
               </div>
@@ -950,7 +1007,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
             </div>
           </div>
         </div>
-        {isMobile ? null : (
+        {breakpoint === "desktop" ? (
           <ChatMinimap
             messages={messages}
             streamingMessage={streamState.streamingMessage}
@@ -958,10 +1015,16 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
             messageRefs={messageRefs}
             onRevealHistory={revealHistoryForMinimap}
           />
-        )}
+        ) : breakpoint === "tablet" && minimapMessages.length > 0 ? (
+          <ChatMinimapFab
+            messages={minimapMessages}
+            bottomOffset={bottomComposerHeight + 8}
+            onSelect={jumpToMsgId}
+          />
+        ) : null}
       </div>
 
-      <div className="relative">
+      <div className="relative" ref={composerHeightRef}>
         {chatInputElement}
         <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />
       </div>
@@ -1271,13 +1334,162 @@ function ExtensionCustomPanel({
   onInput: (request: ExtensionCustomRequest, data: string) => void;
 }) {
   const { t } = useI18n();
+  const parsed = useMemo(() => parseCustomUi(request.lines), [request.lines]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
-  const displayLines = normalizeCustomPanelLines(request.lines);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [selectedCustom, setSelectedCustom] = useState<number | null>(null);
+
+  // Reflect the parsed cursor/selection once on open.
+  useEffect(() => {
+    if (parsed.kind === "options") {
+      const base = parsed.multiSelect ? [] : [parsed.selectedIndex];
+      setSelected(base.filter((i) => i >= 0));
+      setSelectedCustom(parsed.selectedIndex >= 0 && parsed.items[parsed.selectedIndex]?.isCustom
+        ? parsed.selectedIndex
+        : null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request.id]);
 
   useEffect(() => {
     inputRef.current?.focus();
-  }, [request.id]);
+  }, [request.id, selectedCustom]);
+
+  // Raw-text fallback: the Ink-TUI panel had no recognizable structure — let the
+  // hidden terminal textarea (and the desktop keyboard) drive it unchanged.
+  if (parsed.kind === "unknown") {
+    const displayLines = normalizeCustomPanelLines(request.lines);
+    return (
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 95,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+          background: "rgba(0,0,0,0.18)",
+        }}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (!(event.target as HTMLElement).closest("button")) inputRef.current?.focus();
+          }}
+          style={{
+            position: "relative",
+            width: "min(920px, 100%)",
+            maxHeight: "min(760px, calc(100vh - 40px))",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            background: "var(--bg)",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
+            overflow: "hidden",
+            outline: "none",
+          }}
+        >
+          <textarea
+            ref={inputRef}
+             aria-label={t("chat.extensionInput")}
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onKeyDown={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing) return;
+              const data = toTerminalKeyData(event);
+              if (!data) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onInput(request, data);
+            }}
+            onInput={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing) return;
+              const text = event.currentTarget.value;
+              event.currentTarget.value = "";
+              if (text) onInput(request, text);
+            }}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={(event) => {
+              composingRef.current = false;
+              const input = event.currentTarget;
+              queueMicrotask(() => {
+                const text = input.value;
+                input.value = "";
+                if (text) onInput(request, text);
+              });
+            }}
+            onPaste={(event) => {
+              event.preventDefault();
+              const text = event.clipboardData.getData("text");
+              if (text) onInput(request, asBracketedPaste(text));
+            }}
+            style={{
+              position: "absolute",
+              width: 1,
+              height: 1,
+              padding: 0,
+              border: 0,
+              opacity: 0,
+              pointerEvents: "none",
+            }}
+          />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+             <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>{t("chat.extensionPanel")}</div>
+            <button
+              onClick={() => onInput(request, "\x03")}
+              style={{
+                padding: "5px 9px",
+                borderRadius: 6,
+                border: "1px solid var(--border)",
+                background: "var(--bg-panel)",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+               {t("chat.close")}
+            </button>
+          </div>
+          <pre
+            style={{
+              margin: 0,
+              padding: 14,
+              maxHeight: "calc(min(760px, 100vh - 40px) - 48px)",
+              overflow: "auto",
+              background: "var(--bg-panel)",
+              color: "var(--text)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 13,
+              lineHeight: 1.45,
+              whiteSpace: "pre",
+            }}
+          >
+            <AnsiText text={displayLines.join("\n")} />
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
+  const submit = () => { onInput(request, "\r"); };
+  const pick = (index: number, isCustom: boolean) => {
+    if (isCustom) { setSelectedCustom(index); return; }
+    if (parsed.kind !== "options") return;
+    if (parsed.multiSelect) {
+      setSelected((prev) => prev.includes(index)
+        ? prev.filter((i) => i !== index)
+        : [...prev, index]);
+      onInput(request, String(index + 1));
+    } else {
+      onInput(request, `${index + 1}\r`);
+    }
+  };
 
   return (
     <div
@@ -1295,13 +1507,12 @@ function ExtensionCustomPanel({
       <div
         role="dialog"
         aria-modal="true"
-        onClick={(event) => {
-          if (!(event.target as HTMLElement).closest("button")) inputRef.current?.focus();
-        }}
         style={{
           position: "relative",
           width: "min(920px, 100%)",
           maxHeight: "min(760px, calc(100vh - 40px))",
+          display: "flex",
+          flexDirection: "column",
           border: "1px solid var(--border)",
           borderRadius: 8,
           background: "var(--bg)",
@@ -1310,56 +1521,13 @@ function ExtensionCustomPanel({
           outline: "none",
         }}
       >
-        <textarea
-          ref={inputRef}
-           aria-label={t("chat.extensionInput")}
-          autoCapitalize="off"
-          autoComplete="off"
-          autoCorrect="off"
-          spellCheck={false}
-          onKeyDown={(event) => {
-            if (composingRef.current || event.nativeEvent.isComposing) return;
-            const data = toTerminalKeyData(event);
-            if (!data) return;
-            event.preventDefault();
-            event.stopPropagation();
-            onInput(request, data);
-          }}
-          onInput={(event) => {
-            if (composingRef.current || event.nativeEvent.isComposing) return;
-            const text = event.currentTarget.value;
-            event.currentTarget.value = "";
-            if (text) onInput(request, text);
-          }}
-          onCompositionStart={() => {
-            composingRef.current = true;
-          }}
-          onCompositionEnd={(event) => {
-            composingRef.current = false;
-            const input = event.currentTarget;
-            queueMicrotask(() => {
-              const text = input.value;
-              input.value = "";
-              if (text) onInput(request, text);
-            });
-          }}
-          onPaste={(event) => {
-            event.preventDefault();
-            const text = event.clipboardData.getData("text");
-            if (text) onInput(request, asBracketedPaste(text));
-          }}
-          style={{
-            position: "absolute",
-            width: 1,
-            height: 1,
-            padding: 0,
-            border: 0,
-            opacity: 0,
-            pointerEvents: "none",
-          }}
-        />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
-           <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>{t("chat.extensionPanel")}</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>{t("chat.extensionPanel")}</div>
+            {parsed.kind === "options" && parsed.question && (
+              <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 12, whiteSpace: "pre-wrap" }}>{parsed.question}</div>
+            )}
+          </div>
           <button
             onClick={() => onInput(request, "\x03")}
             style={{
@@ -1370,27 +1538,105 @@ function ExtensionCustomPanel({
               color: "var(--text-muted)",
               cursor: "pointer",
               fontSize: 12,
+              flexShrink: 0,
             }}
           >
              {t("chat.close")}
           </button>
         </div>
-        <pre
-          style={{
-            margin: 0,
-            padding: 14,
-            maxHeight: "calc(min(760px, 100vh - 40px) - 48px)",
-            overflow: "auto",
-            background: "var(--bg-panel)",
-            color: "var(--text)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 13,
-            lineHeight: 1.45,
-            whiteSpace: "pre",
-          }}
-        >
-          <AnsiText text={displayLines.join("\n")} />
-        </pre>
+
+        {parsed.kind === "options" ? (
+          <div style={{ padding: 12, minHeight: 0, overflowY: "auto", display: "grid", gap: 6 }}>
+            {parsed.items.map((item, index) => {
+              const isActiveCustom = parsed.multiSelect
+                ? false
+                : selectedCustom === index;
+              const isSelected = item.isCustom ? false : selected.includes(index);
+              const isFocused = parsed.selectedIndex === index;
+              return (
+                <div key={index}>
+                  <button
+                    type="button"
+                    onClick={() => pick(index, item.isCustom)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "8px 10px",
+                      borderRadius: 7,
+                      border: `1px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
+                      background: isSelected || isFocused ? "rgba(96,165,250,0.10)" : "var(--bg-panel)",
+                      color: "var(--text)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      fontSize: 13,
+                    }}
+                  >
+                    <span style={{ flexShrink: 0, color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                      {parsed.multiSelect ? (isSelected ? "☑" : "☐") : `${index + 1}.`}
+                    </span>
+                    <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{item.label}</span>
+                    {item.isCustom && <span style={{ flexShrink: 0, fontSize: 10, color: "var(--text-dim)" }}>{t("chat.customAnswer")}</span>}
+                  </button>
+                  {isActiveCustom && (
+                    <input
+                      autoFocus
+                      defaultValue=""
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); submit(); }
+                        e.stopPropagation();
+                      }}
+                      onBlur={() => setSelectedCustom(null)}
+                      onInput={(e) => onInput(request, (e.target as HTMLInputElement).value)}
+                      style={{
+                        width: "100%",
+                        marginTop: 6,
+                        padding: "7px 10px",
+                        borderRadius: 6,
+                        border: "1px solid var(--border)",
+                        background: "var(--bg)",
+                        color: "var(--text)",
+                        outline: "none",
+                        fontSize: 13,
+                      }}
+                    />
+                  )}
+                  {item.description && (
+                    <div style={{ marginTop: 2, marginLeft: 26, color: "var(--text-dim)", fontSize: 12, whiteSpace: "pre-wrap" }}>{item.description}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ padding: 12, minHeight: 0, overflowY: "auto", display: "grid", gap: 8 }}>
+            {parsed.items.map((item, index) => (
+              <div key={index} style={{ border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg-panel)", padding: "8px 10px" }}>
+                <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 600, overflowWrap: "anywhere" }}>{item.question}</div>
+                <div style={{ marginTop: 3, color: "var(--text-muted)", fontSize: 12, whiteSpace: "pre-wrap" }}>{item.answer}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(parsed.kind === "review" || (parsed.kind === "options" && parsed.multiSelect)) && (
+          <div style={{ flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}>
+            <button
+              onClick={submit}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 6,
+                border: "1px solid var(--accent)",
+                background: "var(--accent)",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+               {t("chat.submit")}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
