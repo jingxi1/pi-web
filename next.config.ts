@@ -1,10 +1,18 @@
 import type { NextConfig } from "next";
+import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 const { version } = JSON.parse(readFileSync(join(configDir, "package.json"), "utf8")) as { version: string };
+let piWebVersion = version;
+try {
+  // Upstream version lives in the `upstream` remote (agegr/pi-web). When absent
+  // (e.g. a fork without that remote), fall back to the local version.
+  const raw = execSync("git show upstream/main:package.json", { stdio: ["ignore", "pipe", "ignore"] }).toString();
+  piWebVersion = JSON.parse(raw).version;
+} catch { /* no upstream remote, use local version */ }
 let piVersion = "unknown";
 try {
   const piPkgPath = join(configDir, "node_modules/@earendil-works/pi-coding-agent/package.json");
@@ -20,6 +28,7 @@ const nextConfig: NextConfig = {
     "@earendil-works/pi-agent-core",
     "@earendil-works/pi-ai",
     "@earendil-works/pi-tui",
+    "node-pty",
   ],
   // Next 16 blocks cross-origin access to dev resources by default. Allow the
   // loopback and the RFC1918 LAN ranges so the dev server stays reachable
@@ -72,6 +81,8 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_APP_VERSION: version,
     NEXT_PUBLIC_PI_VERSION: piVersion,
+    NEXT_PUBLIC_PIWEB_VERSION: piWebVersion,
+    NEXT_PUBLIC_PI_TOOLS_VERSION: version,
   },
 };
 

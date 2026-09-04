@@ -17,6 +17,8 @@ import { AgentSessionPanel } from "./AgentSessionPanel";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
+import { OpenClawIntegration } from "@/components/openclaw-integration";
+import { ShortcutsPanel, setShortcutsPanelOpener, toggleShortcutsPanel } from "@/components/ShortcutsPanel";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { useAudio } from "@/hooks/useAudio";
@@ -79,6 +81,25 @@ export function AppShell() {
   const isNarrowMobile = useIsNarrowMobile();
   useViewportHeight();
 
+  // Register the shortcuts-panel toggle so SessionSidebar / commands can open it.
+  useEffect(() => {
+    setShortcutsPanelOpener(() => setShortcutsOpen((open) => !open));
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const editing =
+        target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (!editing && e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        toggleShortcutsPanel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      setShortcutsPanelOpener(null);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
   // Once the user has granted notification permission, register a Web Push
   // subscription so the server can notify backgrounded PWAs (notably iOS,
   // which suspends page JS and never receives the SSE completion event).
@@ -137,6 +158,7 @@ export function AppShell() {
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [mobileToolbarMoreOpen, setMobileToolbarMoreOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
@@ -1913,6 +1935,7 @@ export function AppShell() {
               )}
               {!isNarrowMobile && renderChatToolbarActions(true)}
               {renderSessionStatsButton(true)}
+              <div data-app-tools-slot style={{ display: "flex", alignItems: "stretch", height: "100%" }} />
               {renderMainFileToggle(true)}
               {isNarrowMobile && mobileToolbarMoreOpen && (
                 <div
@@ -1944,6 +1967,7 @@ export function AppShell() {
               {renderThemeButton(false)}
               {renderLanguageButton(false)}
               {renderProjectTrustWarning(false)}
+              <div data-app-tools-slot style={{ display: "flex", alignItems: "stretch", height: "100%" }} />
               {renderChatToolbarActions(false)}
               {renderSessionStatsButton(false)}
             </>
@@ -2450,6 +2474,11 @@ export function AppShell() {
         onConfirm={() => void handleTrustProject()}
       />
     )}
+    <OpenClawIntegration
+      providerId={null}
+      initialCwd={effectiveNewSessionCwd ?? initialNavigation.requestedCwd ?? null}
+    />
+    <ShortcutsPanel open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </>
   );
 }

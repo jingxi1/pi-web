@@ -32,6 +32,23 @@ import {
   streamReducer,
   type ClientAssistantMessageEvent,
 } from "@/lib/streaming-message";
+import { emitNotifyEvent } from "@/lib/notify-emitter";
+import type { NotifyEventType } from "@/lib/notify-types";
+import { cancel as cancelAutoResume, schedule as scheduleAutoResumeEntry } from "@/lib/auto-resume-store";
+import type { TokenPlanResponse } from "@/app/api/token-plan/[provider]/route";
+import { isQuotaError } from "@/lib/quota-error";
+
+/** Best-effort inverse of formatRemainingSeconds ("2h 30m" → ms, or null). */
+function parseResetWindow(text: string): number | null {
+  const m = text.match(/(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/i);
+  if (!m) return null;
+  const [, days, hours, minutes, seconds] = m;
+  if (!days && !hours && !minutes && !seconds) return null;
+  const totalSec =
+    (Number(days ?? 0) * 86400) + (Number(hours ?? 0) * 3600) +
+    (Number(minutes ?? 0) * 60) + Number(seconds ?? 0);
+  return totalSec > 0 ? totalSec * 1000 : null;
+}
 
 export interface SessionData {
   sessionId: string;
@@ -352,6 +369,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const modelSwitchPendingRef = useRef(false);
   const draftKeyAliasesRef = useRef(new Map<string, string>());
   const sessionHookMountedRef = useRef(true);
+  const lastPromptRef = useRef("");
+  const providerIdRef = useRef<string | null>(null);
 
   sessionPropIdRef.current = session?.id ?? null;
   sessionRunningRef.current = Boolean(sessionRunning);
@@ -393,6 +412,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
+  providerIdRef.current = displayModel?.provider ?? currentModel?.provider ?? providerIdRef.current;
   const composerDraftKey = session?.id ?? newSessionDraftKey ?? undefined;
 
   const resolveComposerDraftKey = useCallback((key: string | undefined) => {
@@ -448,6 +468,46 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       ...(contextUsage ? { contextUsage } : {}),
     } satisfies SessionStatsInfo;
   }, [messages, sessionStatsOverride, contextUsage, data?.context.messages, data?.filePath, data?.totalActiveMs, data?.stats, session?.id, session?.name]);
+
+  // Notify: forward agent lifecycle events to the notify-emitter bus (read by
+  // useNotify in AppShell, which dispatches to the SMTP endpoint).
+  const emitNotify = useCallback((type: NotifyEventType, summary: string, detail?: string) => {
+    emitNotifyEvent({
+      type,
+      sessionId: sessionIdRef.current ?? session?.id ?? null,
+      sessionName: session?.name ?? null,
+      summary,
+      detail,
+    });
+  }, [session]);
+
+  // Auto-resume: a quota/billing rejection schedules this session + last prompt
+  // so useMinimaxTokenPlan's fireOnReset chain can replay it after the reset.
+  const scheduleAutoResume = useCallback(async (errorMessage: string) => {
+    if (!isQuotaError(errorMessage)) return;
+    const sid = sessionIdRef.current ?? session?.id;
+    if (!sid) return;
+    const providerId = providerIdRef.current ?? "unknown";
+    let wakesAt = Date.now();
+    try {
+      const res = await fetch(`/api/token-plan/${encodeURIComponent(providerId)}`);
+      if (res.ok) {
+        const data = await res.json() as TokenPlanResponse;
+        const general = data.categories.find((c) => c.name === "general");
+        const ms = parseResetWindow(general?.intervalResetsIn ?? "");
+        if (ms) wakesAt = Date.now() + ms;
+      }
+    } catch {
+      // Best-effort reset window; default fires as soon as a reset is detected.
+    }
+    scheduleAutoResumeEntry({
+      sessionId: sid,
+      providerId,
+      lastPrompt: lastPromptRef.current,
+      wakesAt,
+      createdAt: Date.now(),
+    });
+  }, [session]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
     let messagesLoaded = false;
@@ -837,8 +897,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (notifiedPromptRunIdRef.current === runId) return false;
     notifiedPromptRunIdRef.current = runId;
     onAgentEnd?.();
+    emitNotify("agentEnd", lastPromptRef.current || "Agent turn finished");
     return true;
-  }, [onAgentEnd]);
+  }, [onAgentEnd, emitNotify]);
 
   const scheduleEventStreamClose = useCallback((sid: string) => {
     cancelEventStreamGrace();
@@ -1122,9 +1183,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           }
         }
         break;
-      case "prompt_error":
-        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
+      case "prompt_error": {
+        const errorMessage = (event.errorMessage as string | undefined) ?? "Command failed";
+        addNotice({ type: "error", message: errorMessage });
+        emitNotify("error", errorMessage);
+        void scheduleAutoResume(errorMessage);
         break;
+      }
       case "extension_error":
         addNotice({
           type: "error",
@@ -1268,9 +1333,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       case "extension_ui_request":
         handleExtensionUiRequest(event as ExtensionUiRequest);
+        {
+          const req = event as ExtensionUiRequest;
+          const title = "title" in req && typeof req.title === "string"
+            ? req.title
+            : "message" in req && typeof req.message === "string"
+              ? req.message
+              : "Extension input needed";
+          emitNotify("inputNeeded", title, title);
+        }
         break;
     }
-  }, [addNotice, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
+  }, [addNotice, cancelEventStreamGrace, emitNotify, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, scheduleAutoResume, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1297,6 +1371,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const promptRunId = promptRunIdRef.current + 1;
     cancelEventStreamGrace();
     rpcPromptPendingRef.current = true;
+    if (message.trim()) lastPromptRef.current = message;
 
     const imageBlocks = images?.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.mimeType, data: img.data } }));
     const userMsg: AgentMessage = {
@@ -1357,9 +1432,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (isSlashCommandPrompt && sentSessionId) {
         void waitForPromptSettlement(sentSessionId, promptRunId);
       }
+      // A prompt accepted means any pending quota auto-resume for this session
+      // is obsolete — clear it to avoid a duplicate replay later.
+      if (sentSessionId) cancelAutoResume(sentSessionId);
     } catch (e) {
       console.error("Failed to send message:", e);
       const definitivelyRejected = !promptRequestStarted || isPromptRejectedError(e);
+      if (definitivelyRejected) {
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        void scheduleAutoResume(errorMessage);
+      }
       // A transport/proxy failure after dispatch is ambiguous: the server may
       // have accepted the prompt before the response was lost. Keep SSE alive
       // until server state confirms the run is idle.
@@ -1390,7 +1472,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission]);
+  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission, scheduleAutoResume]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -1892,6 +1974,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       bashRecoveryIdRef.current += 1;
       cancelEventStreamGrace();
       closeEvents();
+      if (sessionIdRef.current) cancelAutoResume(sessionIdRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
