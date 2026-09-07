@@ -144,6 +144,14 @@ export interface RpcSessionStartOptions {
 const CODING_TOOL_NAMES = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 const THINKING_LEVEL_NAMES = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
+// pi-web divergence (upstream sets no response timeout on streamed model bodies):
+// if a model run stays active but emits no events for this long, the upstream
+// provider is probably stuck mid-stream. Abort it so the session recovers
+// instead of locking forever (which rejects every later prompt). Aligned to the
+// SDK's own default HTTP idle timeout (httpIdleTimeoutMs = 300s).
+const MODEL_STALL_TIMEOUT_MS = 300_000;
+const MODEL_STALL_CHECK_MS = 15_000;
+
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
   constructor() {
@@ -219,6 +227,8 @@ export class AgentSessionWrapper {
   private sessionShutdownEmitted = false;
   private forceShutdownOnIdle = false;
   private _alive = true;
+  private lastRunEventAt = 0;
+  private stallCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     public readonly inner: AgentSessionLike,
@@ -270,6 +280,8 @@ export class AgentSessionWrapper {
 
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
+      // Any activity counts as forward progress for the stall watchdog.
+      this.lastRunEventAt = Date.now();
       if (event.type === "agent_start") this.agentRunNeedsCompletion = true;
       if (event.type === "agent_end") {
         invalidateSessionListCache();
@@ -279,6 +291,59 @@ export class AgentSessionWrapper {
       if (event.type === "agent_settled") this.notifyAgentRunCompleteIfIdle();
     });
     this.resetIdleTimer();
+    if (!this.stallCheckTimer) {
+      this.stallCheckTimer = setInterval(() => this.checkModelStall(), MODEL_STALL_CHECK_MS);
+    }
+  }
+
+  private clearStallCheck(): void {
+    if (this.stallCheckTimer) {
+      clearInterval(this.stallCheckTimer);
+      this.stallCheckTimer = null;
+    }
+  }
+
+  /**
+   * pi-web divergence: a model run that emits nothing for MODEL_STALL_TIMEOUT_MS
+   * is presumed stuck (upstream never times out streamed model bodies). Abort it
+   * so this session can recover instead of staying busy forever.
+   */
+  private checkModelStall(): void {
+    if (!this._alive) return;
+    const modelBusy = this.pendingPromptCount > 0 || this.inner.isStreaming;
+    if (!modelBusy) return;
+    // Long shell commands and compaction can legitimately be silent; leave them.
+    if (this.inner.isBashRunning) return;
+    if (this.inner.isCompacting) return;
+
+    const silentForMs = Date.now() - this.lastRunEventAt;
+    if (silentForMs < MODEL_STALL_TIMEOUT_MS) return;
+
+    console.error(
+      `[pi-web] model produced no output for ${(silentForMs / 1000).toFixed(0)}s; `
+        + `aborting stuck run to unstick session ${this.sessionId}`,
+    );
+    this.emit({
+      type: "extension_ui_request",
+      id: randomUUID(),
+      method: "notify",
+      notifyType: "error",
+      message: "模型长时间无响应，已自动停止，请重试。",
+    } as unknown as AgentEvent);
+
+    void (async () => {
+      try {
+        await this.inner.abort();
+      } catch (error) {
+        console.error("[pi-web] stall abort failed:", error instanceof Error ? error.message : error);
+      } finally {
+        this.pendingPromptCount = 0;
+        this.lastRunEventAt = Date.now();
+        this.emit({ type: "prompt_done" });
+        this.notifyAgentRunCompleteIfIdle();
+        this.resetIdleTimer();
+      }
+    })();
   }
 
   private notifyAgentRunCompleteIfIdle(): void {
@@ -941,6 +1006,7 @@ export class AgentSessionWrapper {
   destroy(): void {
     if (!this._alive) return;
     this._alive = false;
+    this.clearStallCheck();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.inner.isBashRunning) this.inner.abortBash();
     this.unsubscribe?.();

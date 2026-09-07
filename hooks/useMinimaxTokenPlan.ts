@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fireOnReset } from "@/lib/auto-resume-store";
 import type { AutoResumeEntry } from "@/lib/auto-resume-store";
-import type { TokenPlanResponse, TokenPlanCategory } from "@/app/api/token-plan/[provider]/route";
+import type { TokenPlanResponse, TokenPlanCategory } from "@/app/api/token-plan/[provider]/_internal";
 
 const POLL_MS = 60 * 1000;
 
