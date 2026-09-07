@@ -327,6 +327,53 @@ function getPathToIdCache(): Map<string, string> {
   return globalThis.__piPathToSessionIdCache;
 }
 
+/**
+ * Populate the session path caches from the default sessions directory using
+ * only the filesystem (filename + bounded header check). Unlike
+ * listAllSessions(), this never spawns git, so a cold cache cannot block an
+ * SSE handshake or session open on per-repo project resolution.
+ */
+async function warmSessionPaths(): Promise<void> {
+  const sessionsDir = resolvePath(defaultSessionsDir());
+  let projectDirs: Dirent[];
+  try {
+    projectDirs = await readdir(sessionsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const projectDir of projectDirs) {
+    if (!projectDir.isDirectory() && !projectDir.isSymbolicLink()) continue;
+    const projectPath = resolvePathWithinDefaultSessions(
+      join(sessionsDir, projectDir.name),
+      sessionsDir,
+    );
+    if (!projectPath) continue;
+
+    let files: string[];
+    try {
+      files = await readdir(projectPath);
+    } catch {
+      continue;
+    }
+
+    for (const file of files) {
+      if (!file.endsWith(".jsonl")) continue;
+      const candidate = resolvePathWithinDefaultSessions(
+        join(projectPath, file),
+        sessionsDir,
+      );
+      if (!candidate) continue;
+      try {
+        const id = readSessionHeader(candidate)?.id;
+        if (id) cacheSessionPath(id, candidate);
+      } catch {
+        // Skip unreadable or malformed files; the SDK catalogue fallback
+        // still runs if they are actually resolvable.
+      }
+    }
+  }
+}
+
 export async function resolveSessionPath(sessionId: string): Promise<string | null> {
   const cached = getPathCache().get(sessionId);
   if (cached) return cached;
@@ -336,6 +383,13 @@ export async function resolveSessionPath(sessionId: string): Promise<string | nu
     cacheSessionPath(sessionId, targetedPath);
     return getPathCache().get(sessionId) ?? null;
   }
+
+  // Warm the path cache with a fast filesystem-only scan before falling back
+  // to the SDK catalogue. listAllSessions() spawns git for project resolution,
+  // which can stall a cold session-open far past the client's handshake budget.
+  await warmSessionPaths();
+  const warmed = getPathCache().get(sessionId);
+  if (warmed) return warmed;
 
   // Unknown layouts, malformed candidates, and duplicate IDs retain the
   // existing authoritative catalogue scan instead of negative-caching a miss.

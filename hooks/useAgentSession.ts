@@ -35,7 +35,7 @@ import {
 import { emitNotifyEvent } from "@/lib/notify-emitter";
 import type { NotifyEventType } from "@/lib/notify-types";
 import { cancel as cancelAutoResume, schedule as scheduleAutoResumeEntry } from "@/lib/auto-resume-store";
-import type { TokenPlanResponse } from "@/app/api/token-plan/[provider]/route";
+import type { TokenPlanResponse } from "@/app/api/token-plan/[provider]/_internal";
 import { isQuotaError } from "@/lib/quota-error";
 
 /** Best-effort inverse of formatRemainingSeconds ("2h 30m" → ms, or null). */
