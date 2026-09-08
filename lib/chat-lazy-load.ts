@@ -2,6 +2,27 @@ export const VISIBLE_PAGE_SIZE = 50;
 export const CHAT_SCROLL_TAIL_TOLERANCE = 8;
 export const CHAT_SCROLL_REATTACH_TOLERANCE = 96;
 
+// Coarse-pointer (touch/mobile) viewports reattach with a much tighter window.
+// The 96px desktop window is fine with a scroll wheel, but on mobile a reader
+// hovering near the tail to watch text stream in keeps brushing that zone, so
+// the app snaps the viewport back to the bottom on every streamed token and the
+// interface visibly shakes. Reattaching only when the reader is genuinely at
+// the tail keeps the follow useful without the jitter.
+export const CHAT_SCROLL_MOBILE_REATTACH_TOLERANCE = 40;
+
+let cachedReattachTolerance: number | null = null;
+export function getReattachTolerance(): number {
+  if (cachedReattachTolerance === null) {
+    cachedReattachTolerance =
+      typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(pointer: coarse)").matches
+        ? CHAT_SCROLL_MOBILE_REATTACH_TOLERANCE
+        : CHAT_SCROLL_REATTACH_TOLERANCE;
+  }
+  return cachedReattachTolerance;
+}
+
 export function getVisibleRenderWindow(totalCount: number, visibleCount: number): {
   startIndex: number;
   hasMore: boolean;
