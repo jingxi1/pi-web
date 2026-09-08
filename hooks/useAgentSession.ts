@@ -23,9 +23,9 @@ import { userMessageKey } from "@/lib/prompt-recovery";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
 import {
-  CHAT_SCROLL_REATTACH_TOLERANCE,
   CHAT_SCROLL_TAIL_TOLERANCE,
   getLiveFollowAttached,
+  getReattachTolerance,
 } from "@/lib/chat-lazy-load";
 import {
   INITIAL_STREAMING_STATE,
@@ -404,10 +404,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setToolPresetState(getPreferredToolPreset());
   }, [existingSessionId, isNew, setToolPresetState]);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const container = scrollContainerRef.current;
-    messagesEndRef.current?.scrollIntoView({ behavior });
-    if (container) previousScrollTopRef.current = container.scrollTop;
+    if (!container) return;
+    // Pin the viewport only when it has actually drifted off the bottom. During
+    // streaming the follow runs on every streamed token; the guard below skips
+    // the no-op scroll when we are already at the tail, so the container stops
+    // re-targeting on each character. (Element-level scroll anchoring is
+    // avoided too — it can scroll ancestor scroll containers / the layout
+    // viewport on mobile, which reads as whole-interface jitter.)
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+      previousScrollTopRef.current = container.scrollTop;
+      return;
+    }
+    container.scrollTo({ top: container.scrollHeight, behavior });
+    previousScrollTopRef.current = container.scrollTop;
   }, []);
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
@@ -1906,7 +1917,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         clientHeight,
         scrollHeight,
         isAgentRunning
-          ? CHAT_SCROLL_REATTACH_TOLERANCE
+          ? getReattachTolerance()
           : CHAT_SCROLL_TAIL_TOLERANCE,
       );
       isNearBottomRef.current = isAttached;
