@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 
 // LAN TTS service (speechAZ, Azure Cognitive Services Speech).
 // Override with PI_TTS_BASE_URL if the service moves.
-const TTS_BASE_URL = process.env.PI_TTS_BASE_URL || "http://192.168.9.186:8020";
+const TTS_BASE_URL = process.env.PI_TTS_BASE_URL || "http://192.168.9.109:8020";
 const TTS_ENDPOINT = `${TTS_BASE_URL.replace(/\/+$/, "")}/tts`;
 
 // Service rejects text over 5000 chars with 413. Truncate defensively.
