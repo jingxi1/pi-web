@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 async function loadSubject() {
   const { createJiti } = await import("jiti");
-  return createJiti(import.meta.url).import("./[provider]/route.ts");
+  return createJiti(import.meta.url).import("./[provider]/_internal.ts");
 }
 
 test("normalizeTokenPlan maps a typical minimax payload to a general category", async () => {
