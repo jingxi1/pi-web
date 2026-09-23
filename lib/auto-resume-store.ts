@@ -32,7 +32,7 @@ function defaultStorage(): StorageLike | null {
   return null;
 }
 
-let memoryFallback = new Map<string, string>();
+const memoryFallback = new Map<string, string>();
 let liveStorage: StorageLike | null | undefined;
 
 function storage(): StorageLike | null {

@@ -219,6 +219,31 @@ function saveUnreadSessionIds(ids: Set<string>): void {
 // ── Favorites store (localStorage-backed, module-level cache) ──────────────
 const FAVORITES_STORAGE_KEY = "pi-favorites-v1";
 
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: 1,
+        height: 26,
+        padding: "0 8px",
+        background: active ? "var(--bg-selected)" : "transparent",
+        border: "none",
+        borderRadius: 6,
+        color: active ? "var(--text)" : "var(--text-muted)",
+        cursor: "pointer",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: "0.02em",
+        transition: "background 0.12s, color 0.12s",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 let favoritesCache: Set<string> | null = null;
 let favoritesVersion = 0;
 const favoritesListeners = new Set<() => void>();
@@ -1157,6 +1182,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       : null);
 
   const sessionFamilies = useMemo(() => listSessionFamilies(filteredSessions), [filteredSessions]);
+
+  // Favorites tab shows a flat, project-independent list of favorited sessions.
+  const favoriteSessions = useMemo(() => {
+    const byId = new Map(allSessions.map((s) => [s.id, s]));
+    return listFavorites()
+      .map((id) => byId.get(id))
+      .filter((s): s is SessionInfo => s !== undefined && !s.transient);
+  }, [allSessions, favoritesTick]);
 
   const virtualIndices = useMemo(() => getSessionListIndices(
     sessionFamilies.length,

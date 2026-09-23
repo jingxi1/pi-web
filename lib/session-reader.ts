@@ -542,6 +542,68 @@ export function openSessionManager(
   return sm;
 }
 
+/**
+ * Populate the session path caches from the default sessions directory using
+ * only the filesystem (filename + bounded header check). Unlike
+ * listAllSessions(), this never spawns git, so a cold cache cannot block an
+ * SSE handshake or session open on per-repo project resolution.
+ */
+async function warmSessionPaths(): Promise<void> {
+  const sessionsDir = resolvePath(defaultSessionsDir());
+  let projectDirs: Dirent[];
+  try {
+    projectDirs = await readdir(sessionsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  // Collect candidates per id so duplicate files across projects are detected
+  // and excluded — mirroring findSessionPathById's contract, so a warm cache
+  // never overrides the authoritative catalogue fallback for ambiguous ids.
+  const byId = new Map<string, { path: string; count: number }>();
+  for (const projectDir of projectDirs) {
+    if (!projectDir.isDirectory() && !projectDir.isSymbolicLink()) continue;
+    const projectPath = resolvePathWithinDefaultSessions(
+      join(sessionsDir, projectDir.name),
+      sessionsDir,
+    );
+    if (!projectPath) continue;
+
+    let files: string[];
+    try {
+      files = await readdir(projectPath);
+    } catch {
+      continue;
+    }
+
+    for (const file of files) {
+      if (!file.endsWith(".jsonl")) continue;
+      const candidate = resolvePathWithinDefaultSessions(
+        join(projectPath, file),
+        sessionsDir,
+      );
+      if (!candidate) continue;
+      try {
+        const id = readSessionHeader(candidate)?.id;
+        if (id) {
+          const entry = byId.get(id);
+          if (entry) {
+            entry.count += 1;
+            if (entry.path !== candidate) entry.path = "";
+          } else {
+            byId.set(id, { path: candidate, count: 1 });
+          }
+        }
+      } catch {
+        // Skip unreadable or malformed files; the SDK catalogue fallback
+        // still runs if they are actually resolvable.
+      }
+    }
+  }
+  for (const [id, entry] of byId) {
+    if (entry.count === 1 && entry.path) cacheSessionPath(id, entry.path);
+  }
+}
+
 export async function resolveSessionPath(sessionId: string): Promise<string | null> {
   const cached = getPathCache().get(sessionId);
   if (cached) return cached;

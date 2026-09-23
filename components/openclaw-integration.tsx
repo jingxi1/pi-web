@@ -5,14 +5,13 @@ import { createPortal } from "react-dom";
 import { NotifyConfig } from "./NotifyConfig";
 import { ScheduledTasksConfig } from "./ScheduledTasksConfig";
 import { MinimaxTokenPlanBar } from "./MinimaxTokenPlanBar";
-import { TerminalView } from "./TerminalView";
 import { useNotify } from "@/hooks/useNotify";
 import type { AutoResumeEntry } from "@/lib/auto-resume-store";
 
 /**
  * OpenClaw integration seam — the single point where fork-specific UI is wired
  * into AppShell. AppShell imports this component exactly once and renders it
- * once; everything else (toolbar tools menu, modals, token bar, terminal) lives
+ * once; everything else (toolbar tools menu, modals, token bar) lives
  * here.
  */
 
@@ -22,14 +21,13 @@ interface OpenClawIntegrationProps {
   initialCwd?: string | null;
 }
 
-type ToolbarButton = "notify" | "tasks" | "terminal";
+type ToolbarButton = "notify" | "tasks";
 
 export function OpenClawIntegration({ providerId = null, initialCwd = null }: OpenClawIntegrationProps) {
   useNotify();
 
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const toolsHostRef = useRef<HTMLElement | null>(null);
   const [detectedProvider, setDetectedProvider] = useState<string | null>(providerId);
@@ -94,7 +92,6 @@ export function OpenClawIntegration({ providerId = null, initialCwd = null }: Op
   const buttons: { key: ToolbarButton; label: string; open: boolean; onClick: () => void }[] = [
     { key: "notify", label: "通知", open: notifyOpen, onClick: () => setNotifyOpen(true) },
     { key: "tasks", label: "任务", open: tasksOpen, onClick: () => setTasksOpen(true) },
-    { key: "terminal", label: "终端", open: terminalOpen, onClick: () => setTerminalOpen(true) },
   ];
 
   const enabledBarProvider = detectedProvider || null;
@@ -152,14 +149,6 @@ export function OpenClawIntegration({ providerId = null, initialCwd = null }: Op
       />
       <NotifyConfig open={notifyOpen} onClose={() => setNotifyOpen(false)} />
       <ScheduledTasksConfig open={tasksOpen} onClose={() => setTasksOpen(false)} />
-      {terminalOpen && (
-        <div style={terminalOverlayStyle} onClick={(e) => { if (e.target === e.currentTarget) setTerminalOpen(false); }}>
-          <TerminalView
-            initialCwd={initialCwd ?? undefined}
-            onClose={() => setTerminalOpen(false)}
-          />
-        </div>
-      )}
     </>
   );
 }
@@ -218,15 +207,4 @@ const menuItemStyle: React.CSSProperties = {
   cursor: "pointer",
   textAlign: "left",
   whiteSpace: "nowrap",
-};
-
-const terminalOverlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.55)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1200,
-  padding: 24,
 };

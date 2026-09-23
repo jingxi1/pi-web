@@ -5,10 +5,6 @@ import {
   retryAfterSeconds,
 } from "@/lib/auth-throttle";
 import {
-  isApiRequestAllowed,
-  isApiRequestHostAllowed,
-} from "@/lib/request-security";
-import {
   isValidWebSessionToken,
   isValidBasicAuthorization,
   isWebPasswordEnabled,
@@ -26,6 +22,8 @@ function tooManyAttempts(retryAfterMs: number): NextResponse {
 }
 
 export function proxy(request: NextRequest) {
+  const isApiRequest = request.nextUrl.pathname === "/api"
+    || request.nextUrl.pathname.startsWith("/api/");
   const password = process.env.PI_WEB_PASSWORD;
   if (!isWebPasswordEnabled(password)) {
     if (request.nextUrl.pathname === "/login") {

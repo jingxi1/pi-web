@@ -7,6 +7,9 @@ import {
   type TokenPlanResponse,
 } from "./_internal";
 
+export { normalizeTokenPlan, TokenPlanError };
+export type { RawTokenPlan, TokenPlanCategory, TokenPlanResponse };
+
 export const dynamic = "force-dynamic";
 
 /** Supported providers → env key + upstream quota endpoint. */

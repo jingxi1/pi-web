@@ -33,6 +33,7 @@ import { updateExtensionWidgets } from "@/lib/extension-widgets";
 import {
   CHAT_SCROLL_TAIL_TOLERANCE,
   getLiveFollowAttached,
+  getReattachTolerance,
   shouldShowScrollToLatest,
 } from "@/lib/chat-lazy-load";
 import {
@@ -372,6 +373,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
 
   const eventConnectionRef = useRef<AgentEventConnection | null>(null);
+  // Last accepted prompt text, used for notify summary and quota auto-resume.
+  const lastPromptRef = useRef("");
+  // Active provider, used to look up the quota reset window on quota errors.
+  const providerIdRef = useRef<string | null>(null);
   const eventStreamGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventStreamGraceGenerationRef = useRef(0);
   const eventStreamGraceActiveRef = useRef(false);
@@ -480,6 +485,47 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     ? (newSessionThinkingLevel ?? newSessionDefaultThinkingLevel)
     : currentThinkingLevel ?? (data?.context.messages.length === 0 ? newSessionDefaultThinkingLevel : null);
   const composerDraftKey = session?.id ?? newSessionDraftKey ?? undefined;
+  providerIdRef.current = displayModel?.provider ?? currentModel?.provider ?? providerIdRef.current;
+
+  // Notify: forward agent lifecycle events to the notify-emitter bus (read by
+  // useNotify in AppShell, which dispatches to the SMTP endpoint).
+  const emitNotify = useCallback((type: NotifyEventType, summary: string, detail?: string) => {
+    emitNotifyEvent({
+      type,
+      sessionId: sessionIdRef.current ?? session?.id ?? null,
+      sessionName: session?.name ?? null,
+      summary,
+      detail,
+    });
+  }, [session]);
+
+  // Auto-resume: a quota/billing rejection schedules this session + last prompt
+  // so useMinimaxTokenPlan's fireOnReset chain can replay it after the reset.
+  const scheduleAutoResume = useCallback(async (errorMessage: string) => {
+    if (!isQuotaError(errorMessage)) return;
+    const sid = sessionIdRef.current ?? session?.id;
+    if (!sid) return;
+    const providerId = providerIdRef.current ?? "unknown";
+    let wakesAt = Date.now();
+    try {
+      const res = await fetch(`/api/token-plan/${encodeURIComponent(providerId)}`);
+      if (res.ok) {
+        const data = await res.json() as TokenPlanResponse;
+        const general = data.categories.find((c) => c.name === "general");
+        const ms = parseResetWindow(general?.intervalResetsIn ?? "");
+        if (ms) wakesAt = Date.now() + ms;
+      }
+    } catch {
+      // Best-effort reset window; default fires as soon as a reset is detected.
+    }
+    scheduleAutoResumeEntry({
+      sessionId: sid,
+      providerId,
+      lastPrompt: lastPromptRef.current,
+      wakesAt,
+      createdAt: Date.now(),
+    });
+  }, [session]);
 
   const syncLiveModel = useCallback((state?: AgentStateResponse) => {
     setLiveModel(state?.model
@@ -1547,7 +1593,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setExtensionDialog((current) => current?.id === event.id ? null : current);
         break;
     }
-  }, [addNotice, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, scheduleEventStreamClose, scrollToBottom, settleUiStage, syncLiveModel]);
+  }, [addNotice, cancelEventStreamGrace, emitNotify, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, scheduleAutoResume, scheduleEventStreamClose, scrollToBottom, settleUiStage, syncLiveModel]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -2344,8 +2390,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       bashRecoveryIdRef.current += 1;
       cancelEventStreamGrace();
-      closeEvents();
       if (sessionIdRef.current) cancelAutoResume(sessionIdRef.current);
+      closeEvents();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

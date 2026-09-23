@@ -29,6 +29,8 @@ import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { useI18n } from "@/hooks/useI18n";
 import { useChatAppearance } from "@/hooks/useChatAppearance";
+import { listPending, cancel as cancelAutoResume, type AutoResumeEntry } from "@/lib/auto-resume-store";
+import { formatRemainingSeconds } from "@/lib/time-format";
 import type { ToolPreset } from "@/lib/tool-presets";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
 
@@ -564,6 +566,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   draftKey,
   cwd,
   compact = false,
+  sessionId,
 }: Props, ref) {
   const { t } = useI18n();
   const { fontSize } = useChatAppearance();
@@ -1630,6 +1633,35 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }}
       />}
       <div style={{ maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+        {pendingResume && (
+          <div style={{
+            marginBottom: 8,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-panel)",
+            padding: "6px 10px",
+            fontSize: 13,
+          }}>
+            <span style={{ color: "var(--text-muted)", flex: 1 }}>{resumeLabel}</span>
+            <button
+              onClick={() => sessionId && cancelAutoResume(sessionId)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 13,
+                flexShrink: 0,
+              }}
+              title="取消自动重发"
+            >
+              取消
+            </button>
+          </div>
+        )}
         <ModelErrorBanner error={modelError} />
         <ModelScopeWarningBanner warnings={modelScopeWarnings} />
         {showImageUnsupportedWarning && (() => {

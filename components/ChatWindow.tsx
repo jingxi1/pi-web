@@ -253,11 +253,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // Tablet-only ChatMinimapFab legs off the actual composer height so it never
   // overlaps the composer (FAB bottom = composer height + 8).
   const composerHeightRef = useRef<HTMLDivElement | null>(null);
-  const [bottomComposerHeight, setBottomComposerHeight] = useState(80);
+  const [composerMeasuredHeight, setComposerMeasuredHeight] = useState(80);
   useEffect(() => {
     const el = composerHeightRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => setBottomComposerHeight(el.offsetHeight));
+    const ro = new ResizeObserver(() => setComposerMeasuredHeight(el.offsetHeight));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -1283,7 +1283,13 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             </div>
           </div>
         </div>
-        {isMobile || pendingScrollRestore ? null : (
+        {isMobile || pendingScrollRestore ? null : breakpoint === "tablet" && minimapMessages.length > 0 ? (
+          <ChatMinimapFab
+            messages={minimapMessages}
+            bottomOffset={composerMeasuredHeight + 8}
+            onSelect={jumpToMsgId}
+          />
+        ) : (
           <ChatMinimap
             messages={messages}
             streamingMessage={streamState.streamingMessage}
@@ -1374,7 +1380,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
         document.body,
       )}
 
-      <div className="relative shrink-0">
+      <div className="relative shrink-0" ref={composerHeightRef}>
         {!isEmptyNew && (
           <div
             style={{

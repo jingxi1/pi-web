@@ -2,6 +2,7 @@
 // docker-entrypoint.sh / build-and-push.sh / sync.sh can be run directly.
 // No-op on Windows (chmod is a no-op for +x).
 "use strict";
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { chmodSync, existsSync, readdirSync } = require("fs");
 const { join } = require("path");
 
