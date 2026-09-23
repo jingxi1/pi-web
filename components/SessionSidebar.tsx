@@ -11,8 +11,27 @@ import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
+import { useResizablePanel } from "@/hooks/useResizablePanel";
+import { useScrollbarVisibility } from "@/hooks/useScrollbarVisibility";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
+import { SessionSearch } from "./SessionSearch";
+
+// Fixed row height for the session list. SessionItem renders at exactly this
+// height, so the list can be windowed (only the visible slice is mounted).
+const SESSION_LIST_ITEM_HEIGHT = 54;
+
+export function getSessionListIndices(count: number, scrollTop: number, viewportHeight: number, focusedIndex = -1): number[] {
+  const overscan = 8;
+  const visibleCount = Math.ceil((viewportHeight || 600) / SESSION_LIST_ITEM_HEIGHT) + overscan * 2;
+  const start = Math.max(0, Math.min(Math.floor(scrollTop / SESSION_LIST_ITEM_HEIGHT) - overscan, count - visibleCount));
+  const end = Math.min(count, start + visibleCount);
+  const indices = Array.from({ length: end - start }, (_, offset) => start + offset);
+  // Keep a focused row mounted so scrolling cannot discard an inline rename.
+  if (focusedIndex >= 0 && focusedIndex < start) indices.unshift(focusedIndex);
+  if (focusedIndex >= end && focusedIndex < count) indices.push(focusedIndex);
+  return indices;
+}
 
 declare global {
   interface Window {
@@ -81,52 +100,15 @@ function ToolbarIconButton({
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        flex: 1,
-        height: 26,
-        padding: "0 8px",
-        background: active ? "var(--bg-selected)" : "transparent",
-        border: "none",
-        borderRadius: 6,
-        color: active ? "var(--text)" : "var(--text-muted)",
-        cursor: "pointer",
-        fontSize: 11,
-        fontWeight: 600,
-        letterSpacing: "0.02em",
-        transition: "background 0.12s, color 0.12s",
-      }}
-      onMouseEnter={(e) => {
-        if (active) return;
-        e.currentTarget.style.background = "var(--bg-hover)";
-        e.currentTarget.style.color = "var(--text)";
-      }}
-      onMouseLeave={(e) => {
-        if (active) return;
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--text-muted)";
-      }}
-    >
-      {children}
-    </button>
-  );
+function sessionListUrl(summary: boolean, force: boolean): string {
+  if (summary) return "/api/sessions?summary=1";
+  if (force) return "/api/sessions?force=1";
+  return "/api/sessions";
 }
 
 interface Props {
   selectedSessionId: string | null;
-  onSelectSession: (session: SessionInfo, isRestore?: boolean) => void;
+  onSelectSession: (session: SessionInfo, isRestore?: boolean, entryId?: string, blockIndex?: number) => void;
   onNewSession?: (sessionId: string, cwd: string) => void;
   initialSessionId?: string | null;
   skipInitialProjectSelection?: boolean;
@@ -140,6 +122,7 @@ interface Props {
     projectKey?: string | null,
   ) => void;
   onOpenFile?: (filePath: string, fileName: string, options?: { sourceSessionId?: string | null; modeHint?: "diff" }) => void;
+  onOpenTerminal?: (cwd: string) => void;
   explorerRefreshKey?: number;
   onExplorerRefresh?: () => void;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
@@ -186,6 +169,11 @@ interface ValidatedProject {
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
 const LAST_CUSTOM_CWD_STORAGE_KEY = "pi-web:last-custom-cwd";
 const RUNNING_SESSIONS_POLL_MS = 2500;
+const SESSION_DETAILS_HYDRATION_DELAY_MS = 750;
+const SESSION_PANE_DEFAULT_HEIGHT = 320;
+const SESSION_PANE_MIN_HEIGHT = 80;
+const EXPLORER_PANE_MIN_HEIGHT = 120;
+const SESSION_PANE_MAX_HEIGHT = 1600;
 
 function loadLastCustomCwd(): string {
   if (typeof window === "undefined") return "";
@@ -460,12 +448,16 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
   const { t } = useI18n();
   const breakpoint = useBreakpoint();
   const [sidebarTab, setSidebarTab] = useState<"sessions" | "favorites">("sessions");
   const favoritesTick = useSyncExternalStore(subscribeFavorites, getFavoritesVersion, () => 0);
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
+  // Tracked in a ref only: the version is compared against the polled value to
+  // decide whether the list needs reloading, and no render reads it.
+  const sessionListVersionRef = useRef<number | null>(null);
+  const sessionLoadIdRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
@@ -494,9 +486,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [explorerKey, setExplorerKey] = useState(0);
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
   const [fileSearchOpen, setFileSearchOpen] = useState(false);
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const sessionSearchActive = sessionSearchOpen && Boolean(sessionSearchQuery.trim());
   const [changesCount, setChangesCount] = useState(0);
   const [changesCollapsed, setChangesCollapsed] = useState(true);
-  const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
@@ -506,22 +500,95 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Once polling has delivered a snapshot it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
   const runningPollAuthoritativeRef = useRef(false);
-  const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const detailsHydrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileExplorerRef = useRef<FileExplorerHandle>(null);
 
-  const loadSessions = useCallback(async (showLoading = false, force = false) => {
+  // Virtualized session list: only the visible window of rows is mounted.
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const explorerScrollRef = useRef<HTMLDivElement>(null);
+  useScrollbarVisibility(listScrollRef);
+  useScrollbarVisibility(explorerScrollRef, explorerOpen && Boolean(selectedCwdProp || selectedCwd));
+  const sessionPaneRef = useRef<HTMLDivElement>(null);
+  const explorerSectionRef = useRef<HTMLDivElement>(null);
+  const sessionPaneHeightRef = useRef(SESSION_PANE_DEFAULT_HEIGHT);
+  const getDefaultSessionPaneHeight = useCallback(() => {
+    if (!explorerOpen) return SESSION_PANE_DEFAULT_HEIGHT;
+    const paneHeight = sessionPaneRef.current?.getBoundingClientRect().height;
+    const explorerHeight = explorerSectionRef.current?.getBoundingClientRect().height;
+    return paneHeight && explorerHeight
+      ? Math.round((paneHeight + explorerHeight) / 2)
+      : SESSION_PANE_DEFAULT_HEIGHT;
+  }, [explorerOpen]);
+  const getMaxSessionPaneHeight = useCallback(() => {
+    if (!explorerOpen || !(selectedCwdProp || selectedCwd)) return SESSION_PANE_MAX_HEIGHT;
+    const paneHeight = sessionPaneRef.current?.getBoundingClientRect().height ?? SESSION_PANE_DEFAULT_HEIGHT;
+    const explorerHeight = explorerSectionRef.current?.getBoundingClientRect().height ?? EXPLORER_PANE_MIN_HEIGHT;
+    return Math.max(
+      SESSION_PANE_MIN_HEIGHT,
+      paneHeight + explorerHeight - EXPLORER_PANE_MIN_HEIGHT,
+    );
+  }, [explorerOpen, selectedCwd, selectedCwdProp]);
+  const sessionPaneResizer = useResizablePanel({
+    ariaLabel: t("layout.resizeSidebarSections"),
+    axis: "vertical",
+    cssVariable: "--sidebar-session-pane-height",
+    defaultWidth: SESSION_PANE_DEFAULT_HEIGHT,
+    getDefaultWidth: getDefaultSessionPaneHeight,
+    getMaxWidth: getMaxSessionPaneHeight,
+    growthDirection: "down",
+    maxWidth: SESSION_PANE_MAX_HEIGHT,
+    minWidth: SESSION_PANE_MIN_HEIGHT,
+    storageKey: "pi-web:sidebar-session-pane-height",
+    widthRef: sessionPaneHeightRef,
+  });
+  const [listViewportH, setListViewportH] = useState(0);
+  const [listScrollTop, setListScrollTop] = useState(0);
+  const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
+  const listScrollRafRef = useRef<number | null>(null);
+  const listScrollTopRef = useRef(0);
+  const renderedListScrollTopRef = useRef(0);
+  const handleListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    listScrollTopRef.current = e.currentTarget.scrollTop;
+    if (listScrollRafRef.current != null) return;
+    listScrollRafRef.current = requestAnimationFrame(() => {
+      listScrollRafRef.current = null;
+      const nextTop = Math.floor(listScrollTopRef.current / SESSION_LIST_ITEM_HEIGHT) * SESSION_LIST_ITEM_HEIGHT;
+      if (renderedListScrollTopRef.current === nextTop) return;
+      renderedListScrollTopRef.current = nextTop;
+      setListScrollTop(nextTop);
+    });
+  }, []);
+  useLayoutEffect(() => {
+    const el = listScrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) setListViewportH(entry.contentRect.height);
+    });
+    ro.observe(el);
+    setListViewportH(el.clientHeight);
+    listScrollTopRef.current = el.scrollTop;
+    renderedListScrollTopRef.current = Math.floor(el.scrollTop / SESSION_LIST_ITEM_HEIGHT) * SESSION_LIST_ITEM_HEIGHT;
+    setListScrollTop(renderedListScrollTopRef.current);
+    return () => ro.disconnect();
+  }, [sessionSearchActive]);
+
+  const loadSessions = useCallback(async (showLoading = false, force = false, summary = false) => {
+    const loadId = ++sessionLoadIdRef.current;
     try {
       if (showLoading) setLoading(true);
-      const res = await fetch(force ? "/api/sessions?force=1" : "/api/sessions", {
+      const res = await fetch(sessionListUrl(summary, force), {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as {
         sessions: SessionInfo[];
+        sessionListVersion: number;
         runningSessionIds?: string[];
         completionNotificationSuppressedSessionIds?: string[];
       };
+      if (loadId !== sessionLoadIdRef.current) return;
+      sessionListVersionRef.current = data.sessionListVersion;
       setAllSessions(data.sessions);
       // Treat the fetched running set as an initial fallback only. Once the
       // lightweight poll is live, a slow session-list fetch cannot overwrite it.
@@ -544,15 +611,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         return next.size === prev.size ? prev : next;
       });
       setError(null);
-      if (!showLoading) {
-        setSessionRefreshDone(true);
-        if (sessionRefreshTimerRef.current) clearTimeout(sessionRefreshTimerRef.current);
-        sessionRefreshTimerRef.current = setTimeout(() => setSessionRefreshDone(false), 2000);
-      }
     } catch (e) {
-      setError(String(e));
+      if (loadId === sessionLoadIdRef.current) setError(String(e));
     } finally {
-      if (showLoading) setLoading(false);
+      if (loadId === sessionLoadIdRef.current) setLoading(false);
     }
   }, []);
 
@@ -560,7 +622,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     const isFirst = !initialLoadDone.current;
     initialLoadDone.current = true;
-    loadSessions(isFirst, !isFirst);
+    let active = true;
+
+    if (isFirst) {
+      // Header/stat metadata is enough to select the URL session and paint the
+      // sidebar. Hydrate exact counts, names, and first messages once the
+      // selected chat has had a chance to start loading.
+      void loadSessions(true, false, true).then(() => {
+        if (!active) return;
+        detailsHydrationTimerRef.current = setTimeout(() => {
+          detailsHydrationTimerRef.current = null;
+          if (active) void loadSessions(false, true);
+        }, SESSION_DETAILS_HYDRATION_DELAY_MS);
+      });
+    } else {
+      void loadSessions(false, true);
+    }
+
+    return () => {
+      active = false;
+      if (detailsHydrationTimerRef.current) {
+        clearTimeout(detailsHydrationTimerRef.current);
+        detailsHydrationTimerRef.current = null;
+      }
+    };
   }, [loadSessions, refreshKey]);
 
   // Browser storage is unavailable during server rendering. Restore the panel
@@ -603,6 +688,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         });
         if (!res.ok) return;
         const data = await res.json() as {
+          sessionListVersion: number;
           runningSessionIds?: string[];
           completionNotificationSuppressedSessionIds?: string[];
         };
@@ -612,6 +698,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           data.completionNotificationSuppressedSessionIds ?? [],
         );
         setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+        if (data.sessionListVersion !== sessionListVersionRef.current) {
+          // Reuse the invalidated cache; forcing a scan would change the version again.
+          await loadSessions();
+        }
       } catch {
         // Keep the last known state; the next visible-tab poll retries.
       } finally {
@@ -638,7 +728,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       controller?.abort();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [loadSessions]);
 
   useEffect(() => {
     onRunningSessionIdsChange?.(runningSessionIds);
@@ -988,9 +1078,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
-  const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
+  const handleSelectSessionFromList = useCallback((s: SessionInfo, entryId?: string, blockIndex?: number) => {
+    setAllSessions((current) => current.some((session) => session.id === s.id) ? current : [s, ...current]);
     if (s.cwd) setSelectedCwd(s.cwd);
-    onSelectSession(s);
+    onSelectSession(s, false, entryId, blockIndex);
   }, [onSelectSession]);
 
   const handleNewSession = useCallback(() => {
@@ -1003,14 +1094,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const recentProjects = getRecentProjects(allSessions);
+  const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
   const showProjectFilter = recentProjects.length > 8;
-  const visibleProjects = projectFilter.trim()
-    ? recentProjects.filter((project) => project.root.toLowerCase().includes(projectFilter.trim().toLowerCase()))
-    : recentProjects;
+  const visibleProjects = useMemo(() => {
+    const query = projectFilter.trim().toLowerCase();
+    return query
+      ? recentProjects.filter((project) => project.root.toLowerCase().includes(query))
+      : recentProjects;
+  }, [projectFilter, recentProjects]);
 
   // Sessions of every worktree in the selected project are shown together
-  const selectedProject = projectFor(selectedCwd);
+  const selectedProject = useMemo(() => projectFor(selectedCwd), [projectFor, selectedCwd]);
 
   // Per-project activity counts (running / unread) for the workspace selector.
   // Uses the same stable server key as the project list and filtering.
@@ -1029,9 +1123,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     [projectActivity, selectedProject],
   );
 
-  const filteredSessions = selectedProject
-    ? sessionsForProject(allSessions, selectedProject.key)
-    : allSessions;
+  const filteredSessions = useMemo(
+    () => selectedProject ? sessionsForProject(allSessions, selectedProject.key) : allSessions,
+    [allSessions, selectedProject],
+  );
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -1061,21 +1156,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
       : null);
 
-  const sessionFamilies = useMemo(
-    () => listSessionFamilies(filteredSessions),
-    [filteredSessions],
-  );
+  const sessionFamilies = useMemo(() => listSessionFamilies(filteredSessions), [filteredSessions]);
 
-  // Favorites tab shows a flat, project-independent list of favorited sessions.
-  const favoriteSessions = useMemo(() => {
-    const byId = new Map(allSessions.map((s) => [s.id, s]));
-    return listFavorites()
-      .map((id) => byId.get(id))
-      .filter((s): s is SessionInfo => s !== undefined && !s.transient);
-  }, [allSessions, favoritesTick]);
+  const virtualIndices = useMemo(() => getSessionListIndices(
+    sessionFamilies.length,
+    listScrollTop,
+    listViewportH,
+    sessionFamilies.findIndex((family) => family.root.id === focusedSessionId),
+  ), [focusedSessionId, listScrollTop, listViewportH, sessionFamilies]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <div
+      ref={sessionPaneResizer.panelRef}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        overflow: "hidden",
+        "--sidebar-session-pane-height": `${sessionPaneResizer.width}px`,
+      } as CSSProperties}
+    >
       {customPathOpen && (
         <DirectoryPicker
           initialPath={customPathValue}
@@ -1138,43 +1238,20 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               {t("sidebar.new")}
             </button>
             <button
-              onClick={() => loadSessions(false, true)}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                background: sessionRefreshDone ? "rgba(74,222,128,0.18)" : "var(--bg-hover)",
-                border: `1px solid ${sessionRefreshDone ? "rgba(74,222,128,0.4)" : "var(--border)"}`,
-                color: sessionRefreshDone ? "#4ade80" : "var(--text-muted)",
-                cursor: "pointer",
-                width: 32, height: 32,
-                borderRadius: 7,
-                padding: 0,
-                flexShrink: 0,
-                transition: "background 0.3s, color 0.3s, border-color 0.3s",
+              type="button"
+              onClick={() => {
+                setSessionSearchOpen((open) => !open);
+                setWtDropdownOpen(false);
               }}
-              onMouseEnter={(e) => {
-                if (sessionRefreshDone) return;
-                e.currentTarget.style.background = "var(--bg-selected)";
-                e.currentTarget.style.color = "var(--accent)";
-                e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-              }}
-              onMouseLeave={(e) => {
-                if (sessionRefreshDone) return;
-                e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = "var(--text-muted)";
-                e.currentTarget.style.borderColor = "var(--border)";
-              }}
-               title={t("sidebar.refresh")}
+              title={t("sidebar.toggleSessionSearch")}
+              aria-label={t("sidebar.toggleSessionSearch")}
+              aria-expanded={sessionSearchOpen}
+              aria-controls="session-search-input"
+              className={`flex h-[32px] w-[32px] shrink-0 cursor-pointer items-center justify-center rounded-[7px] border border-border hover:bg-bg-selected focus-visible:outline-2 focus-visible:outline-accent ${sessionSearchOpen ? "bg-bg-selected text-accent" : "bg-bg-hover text-text-muted"}`}
             >
-              {sessionRefreshDone ? (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                </svg>
-              )}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" />
+              </svg>
             </button>
           </div>
         </div>
@@ -1384,6 +1461,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           </AnimatedDropdown>
         </div>
 
+        {sessionSearchOpen && (
+          <input
+            id="session-search-input"
+            type="search"
+            autoFocus
+            value={sessionSearchQuery}
+            maxLength={200}
+            aria-label={t("sidebar.searchSessions")}
+            placeholder={t("sidebar.searchSessions")}
+            onChange={(event) => setSessionSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                setSessionSearchQuery("");
+              }
+            }}
+            className="mt-[6px] block h-[29px] w-full min-w-0 rounded-[7px] border border-border bg-bg px-[10px] text-xs text-text focus:outline-2 focus:outline-accent"
+          />
+        )}
+
         {/* Worktree switcher — shown only for git projects at a checkout top
             level (repo subdirs keep their own project identity, so switching
             from them would jump projects). Rendered whenever the selected cwd
@@ -1391,7 +1488,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             switching between worktrees of one project keeps the row mounted
             instead of flickering while data refetches: all worktrees of a
             project share the same list anyway. */}
-        {showWorktreeSwitcher && (() => {
+        {!sessionSearchOpen && showWorktreeSwitcher && (() => {
           if (!worktreeState) return null;
           const showWtFilter = worktreeState.worktrees.length >= 8;
           const visibleWorktrees = showWtFilter && wtFilter.trim()
@@ -1657,7 +1754,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                             background: "var(--accent)",
                             border: "none",
                             borderRadius: 5,
-                            color: "#fff",
+                            color: "var(--accent-contrast)",
                             fontSize: 11,
                             fontWeight: 600,
                             cursor: wtBusy || !wtNewBranch.trim() ? "not-allowed" : "pointer",
@@ -1699,7 +1796,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </div>
           );
         })()}
-        {inactiveWorktreeSelector && (
+        {!sessionSearchOpen && inactiveWorktreeSelector && (
           <button
             type="button"
             aria-disabled="true"
@@ -1748,7 +1845,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       </div>
 
       {/* Session list */}
-      <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+      <div
+        ref={sessionPaneRef}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: explorerOpen && (selectedCwdProp || selectedCwd)
+            ? "0 1 var(--sidebar-session-pane-height, 320px)"
+            : "1 1 auto",
+          minHeight: SESSION_PANE_MIN_HEIGHT,
+          overflow: "hidden",
+        }}
+      >
+        <SessionSearch open={sessionSearchOpen} query={sessionSearchQuery} selectedSessionId={selectedSessionId} onSelectSession={handleSelectSessionFromList}>
+        <div
+          ref={listScrollRef}
+          onScroll={handleListScroll}
+          className="scrollbar-subtle"
+          style={{
+            flex: "1 1 auto",
+            minHeight: 0,
+            overflowY: "auto",
+            padding: "0",
+          }}
+        >
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.loading")}
@@ -1789,40 +1909,77 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {t("sidebar.noSessions")}
           </div>
         )}
-        {sidebarTab === "sessions" && sessionFamilies.map((family) => {
-          const familySessions = [family.root, ...family.subagents];
-          const displaySession = family.latestModified === family.root.modified
-            ? family.root
-            : { ...family.root, modified: family.latestModified };
-          return (
-            <SessionItem
-              key={family.root.id}
-              session={displaySession}
-              isSelected={familySessions.some((session) => session.id === selectedSessionId)}
-              isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
-              isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
-              isFavorite={hasFavorite(family.root.id)}
-              onToggleFavorite={() => toggleFavorite(family.root.id)}
-              onClick={() => handleSelectSessionFromList(family.root)}
-              onRenamed={loadSessions}
-              onDeleted={(id) => {
-                onSessionDeleted?.(id);
-                loadSessions();
-              }}
-            />
-          );
-        })}
+        {sessionFamilies.length > 0 && (
+          <div
+            style={{
+              position: "relative",
+              height: sessionFamilies.length * SESSION_LIST_ITEM_HEIGHT,
+            }}
+          >
+            {virtualIndices.map((index) => {
+              const family = sessionFamilies[index];
+              const familySessions = [family.root, ...family.subagents];
+              const displaySession = family.latestModified === family.root.modified
+                ? family.root
+                : { ...family.root, modified: family.latestModified };
+              // Bubble blur after the input's save handler before unpinning the row.
+              return (
+                <div
+                  key={family.root.id}
+                  onFocus={() => setFocusedSessionId(family.root.id)}
+                  onBlur={() => setFocusedSessionId(null)}
+                  style={{ position: "absolute", top: index * SESSION_LIST_ITEM_HEIGHT, left: 0, right: 0 }}
+                >
+                  <SessionItem
+                    session={displaySession}
+                    isSelected={familySessions.some((session) => session.id === selectedSessionId)}
+                    isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
+                    isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+                    onClick={() => handleSelectSessionFromList(family.root)}
+                    onRenamed={loadSessions}
+                    onDeleted={(id) => {
+                      onSessionDeleted?.(id);
+                      loadSessions();
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+        </div>
+        </SessionSearch>
       </div>
+
+      {explorerOpen && (selectedCwdProp || selectedCwd) && (
+        <div
+          className={`sidebar-section-resize-handle${sessionPaneResizer.isResizing ? " is-resizing" : ""}`}
+          data-resize-handle="sidebar-sections"
+          title={`${t("layout.resizeSidebarSections")}: ${t("layout.resizeHeightHint")}`}
+          style={{
+            position: "relative",
+            zIndex: 20,
+            width: "100%",
+            height: 12,
+            margin: "-6px 0",
+            flex: "0 0 12px",
+            cursor: "row-resize",
+            touchAction: "none",
+          }}
+          {...sessionPaneResizer.separatorProps}
+        />
+      )}
 
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
         <div
+          ref={explorerSectionRef}
           style={{
             borderTop: "1px solid var(--border)",
             display: "flex",
             flexDirection: "column",
             flex: explorerOpen ? "1 1 0" : "0 0 auto",
-            minHeight: 0,
+            minHeight: explorerOpen ? EXPLORER_PANE_MIN_HEIGHT : 0,
             overflow: "hidden",
           }}
         >
@@ -1859,6 +2016,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               </svg>
               {t("files.explorer")}
             </button>
+            {onOpenTerminal && (
+              <ToolbarIconButton
+                onClick={() => onOpenTerminal(selectedCwd ?? selectedCwdProp!)}
+                title={t("terminal.open")}
+                color="var(--text-dim)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+              </ToolbarIconButton>
+            )}
             {explorerOpen && changesCount > 0 && (
               <ToolbarIconButton
                 onClick={() => setChangesCollapsed((v) => !v)}
@@ -1930,7 +2098,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </ToolbarIconButton>
           </div>
           {explorerOpen && (
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+            <div ref={explorerScrollRef} className="scrollbar-subtle" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
               <FileExplorer
                 ref={fileExplorerRef}
                 cwd={selectedCwd ?? selectedCwdProp!}
@@ -2186,8 +2354,6 @@ function SessionItem({
   }, [onRenamed, session.cwd, session.id, session.name, session.path]);
 
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
-  const ITEM_HEIGHT = 54;
-
   return (
     <div
       onClick={confirmDelete || renaming ? undefined : onClick}
@@ -2195,7 +2361,7 @@ function SessionItem({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
       style={{
-        height: ITEM_HEIGHT,
+        height: SESSION_LIST_ITEM_HEIGHT,
         display: "flex",
         alignItems: "center",
         paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
@@ -2324,7 +2490,9 @@ function SessionItem({
               ) : (
                 <span title={session.modified}>{formatRelativeTime(session.modified, locale)}</span>
               )}
-              <span>{t("sidebar.messagesCount", { count: session.messageCount })}</span>
+              <span>
+                {session.detailsPending ? "…" : t("sidebar.messagesCount", { count: session.messageCount })}
+              </span>
               {session.isWorktree && session.branch && (
                 <span
                   title={`Worktree: ${session.cwd}`}

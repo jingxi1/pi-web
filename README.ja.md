@@ -4,7 +4,9 @@
 
 [pi コーディングエージェント](https://github.com/badlogic/pi-mono) のローカル Web UI です。Pi Web はローカルの pi セッションファイルを読み込み、セッションの閲覧、リアルタイムチャット、モデル設定、スキル管理、プロジェクトファイルのプレビューを行えるブラウザワークスペースを提供します。
 
-![Pi Web では、CLI と同じ pi セッションを、構造化された Markdown、ツール呼び出し、プロジェクトナビゲーションとともに表示できます](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
+**[インタラクティブデモを試す →](https://agegr.github.io/pi-web/)**：実際の Pi Web UI がブラウザー内だけで動作し、サンプルのセッション、ファイル、モデルを確認できます。インストールは不要です。返信はあらかじめ用意された内容で、モデルは呼び出しません。
+
+![構造化された Markdown、ツール呼び出し、プロジェクトナビゲーションとともに pi セッションを表示する Pi Web](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
 
 CLI と Pi Web で同じ pi セッションを利用できます。構造化されたツール呼び出し、読みやすい Markdown、セッション閲覧、整理された結果表示を備えています。
 
@@ -27,7 +29,20 @@ pi-web
 
 続いて [http://127.0.0.1:30141](http://127.0.0.1:30141) を開きます。サーバーの準備が整うと、CLI はブラウザを自動的に開こうとします。Pi Web はデフォルトで `127.0.0.1` のみをリッスンします。
 
-**オプション：**
+## 設定
+
+ポートとホスト名では、コマンドラインオプションが対応する環境変数より優先されます。`--no-open` と `PI_WEB_NO_OPEN=1` は、どちらを指定してもブラウザーの自動起動が無効になります。`pi-web --help`（または `-h`）で起動オプションを表示して終了します。未知のオプションはエラーで終了します。
+
+| オプションまたは環境変数 | 用途 | デフォルト |
+| --- | --- | --- |
+| `--help`、`-h` | 起動オプションを表示して終了 | — |
+| `--port <port>`、`-p <port>`、または `PORT` | サーバーポート | `30141` |
+| `--hostname <host>`、`-H <host>`、または `PI_WEB_HOSTNAME` | バインドするホスト名 | `127.0.0.1` |
+| `--no-open` または `PI_WEB_NO_OPEN=1` | ブラウザーを自動的に開かない | 自動的に開く |
+| `PI_WEB_ALLOWED_HOSTS` | 追加で許可するプロキシまたはカスタムホスト名。複数指定はカンマ区切りで完全一致 | 未設定 |
+| `PI_WEB_PASSWORD` | ブラウザーのパスワードログインを有効化。API はユーザー名 `pi` の Basic Auth も利用可能 | 認証なし |
+
+例：
 
 ```bash
 pi-web --port 8080              # カスタムポート
@@ -49,7 +64,11 @@ API リクエストでは、loopback 名、IP リテラル、選択したバイ�
 
 ## HTTP プロキシ
 
-Pi Web は、サーバー側のモデルリクエストと API リクエストに標準の `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 環境変数を使用します。
+パスワード認証は接続を暗号化しません。平文 HTTP で Pi Web をインターネットに公開せず、信頼できるリバースプロキシによる HTTPS または信頼できる VPN を使用してください。リバースプロキシが外部ホスト名を転送する場合は、その名前を完全一致で `PI_WEB_ALLOWED_HOSTS` に追加します。この許可リストは Pi Web のバインド先を変更しません。
+
+### HTTP プロキシ
+
+サーバー側のモデルリクエストと API リクエストは、標準の `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 環境変数を使用します。
 
 macOS または Linux：
 
@@ -108,43 +127,12 @@ npm run lint
 ## プロジェクト構成
 
 ```text
-app/
-  api/
-    agent/          # AgentSession を作成・操作し、SSE イベントを公開
-    auth/           # OAuth と API キーの管理
-    cwd/validate/   # カスタム作業ディレクトリの検証
-    default-cwd/    # pi のデフォルト作業ディレクトリを取得
-    files/          # ファイルの一覧、読み込み、プレビュー、監視
-    home/           # 現在のユーザーのホームディレクトリ
-    models/         # 利用可能なモデル、デフォルトモデル、思考レベル
-    models-config/  # models.json の読み書きとモデルのテスト
-    sessions/       # セッションの読み込み、名前変更、削除、コンテキスト、HTML エクスポート
-    skills/         # スキルの一覧、検索、インストール、有効化／無効化
-components/
-  AppShell.tsx        # メインレイアウト、URL 状態、上部パネル、ファイルタブ
-  SessionSidebar.tsx  # プロジェクト選択、セッションツリー、Explorer
-  ChatWindow.tsx      # メッセージ、SSE、画像のドラッグ＆ドロップ、ミニマップ
-  ChatInput.tsx       # 入力欄、モデル／ツール／思考／コンパクション／スラッシュコントロール
-  MessageView.tsx     # メッセージ、思考、ツール呼び出し／結果の表示
-  ModelsConfig.tsx    # モデルと認証の設定パネル
-  SkillsConfig.tsx    # スキル管理パネル
-  FileExplorer.tsx    # ファイルツリー
-  FileViewer.tsx      # ソース、差分、画像、音声、PDF、DOCX のプレビュー
-lib/
-  http-dispatcher.ts  # サーバー側 fetch の HTTP(S) プロキシ設定
-  rpc-manager.ts      # AgentSessionWrapper のライフサイクルとグローバルレジストリ
-  session-reader.ts   # .jsonl セッションファイルとブランチコンテキストの解析
-  normalize.ts        # toolCall フィールド名の正規化
-  file-access.ts      # ファイル読み込みの安全境界
-  file-paths.ts       # ファイルパスのエンコードと相対パスのヘルパー
-  markdown.ts         # Markdown／Mermaid／KaTeX プラグインの設定
-  pi-types.ts         # pi 関連の型
-hooks/
-  useAgentSession.ts  # セッションの読み込み、コマンド送信、SSE ステートマシン
-  useAudio.ts         # 完了通知音
-  useDragDrop.ts      # 画像のドラッグ＆ドロップ
-  useTheme.ts         # テーマの切り替え
-bin/
-  pi-web.js           # npm CLI エントリポイント
-instrumentation.ts    # サーバー HTTP ディスパッチャーの初期化
+app/             Next.js UI と API ルート
+components/      React UI コンポーネント
+hooks/           クライアントの状態と操作に関する hooks
+lib/             セッション、エージェント、モデル、ファイル、Git、セキュリティのロジック
+public/          静的アセットと PWA ファイル
+bin/             npm CLI エントリポイントと起動オプションの解析
+docs/            ユーザーおよびコントリビューター向けの個別ガイド
+demo/            GitHub Pages で公開する静的デモ（demo/README.md を参照）
 ```

@@ -4,6 +4,8 @@
 
 [pi 编程智能体](https://github.com/badlogic/pi-mono) 的本地网页界面。它会读取本机的 pi 会话文件，在浏览器里提供会话管理、实时对话、模型配置、技能管理和项目文件预览。
 
+**[在线体验演示 →](https://agegr.github.io/pi-web/)**：真实的 Pi Web 界面直接在浏览器里运行，带有示例会话、文件和模型。无需安装；回复都是预设内容，不会调用任何模型。
+
 中文微信群：请查看 [GitHub Discussions 帖子](https://github.com/agegr/pi-web/discussions/271)。
 
 ## 快速开始
@@ -25,7 +27,20 @@ pi-web
 
 启动后打开 [http://127.0.0.1:30141](http://127.0.0.1:30141)。命令行版本会在服务就绪后尝试自动打开浏览器。Pi Web 默认仅监听 `127.0.0.1`。
 
-**可选参数：**
+## 配置
+
+端口和主机名以命令行参数为准，优先于对应的环境变量。`--no-open` 与 `PI_WEB_NO_OPEN=1` 中任意一个都会关闭自动打开浏览器。运行 `pi-web --help`（或 `-h`）可打印启动选项并以退出码 0 结束，不会启动服务；未知参数会报错并以退出码 1 结束。
+
+| 参数或环境变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `--help`、`-h` | 打印启动选项并退出 | — |
+| `--port <端口>`、`-p <端口>` 或 `PORT` | 服务端口 | `30141` |
+| `--hostname <主机>`、`-H <主机>` 或 `PI_WEB_HOSTNAME` | 监听主机名 | `127.0.0.1` |
+| `--no-open` 或 `PI_WEB_NO_OPEN=1` | 不自动打开浏览器 | 自动打开 |
+| `PI_WEB_ALLOWED_HOSTS` | 额外允许的代理或自定义主机名，多个值用逗号分隔，必须精确匹配 | 未设置 |
+| `PI_WEB_PASSWORD` | 启用浏览器密码登录；API 客户端可使用用户名为 `pi` 的 Basic Auth | 不启用认证 |
+
+例如：
 
 ```bash
 pi-web --port 8080              # 自定义端口
@@ -47,7 +62,11 @@ API 请求仅接受 loopback 名称、IP 字面量、当前监听主机名，以
 
 ## HTTP 代理
 
-Pi Web 的服务端模型请求和 API 请求会读取标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY` 环境变量。
+密码认证不会加密连接。不要通过明文 HTTP 将 Pi Web 暴露到互联网；远程访问应使用可信反向代理提供 HTTPS，或通过可信 VPN。如果反向代理传递外部主机名，请把该名称精确加入 `PI_WEB_ALLOWED_HOSTS`。这个白名单不会改变 Pi Web 的监听地址。
+
+### HTTP 代理
+
+服务端的模型和 API 请求会读取标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY` 环境变量。
 
 macOS 或 Linux：
 
@@ -105,6 +124,17 @@ npm run lint
 
 ## 项目结构
 
+## 仓库结构
+
+```text
+app/             Next.js 界面和 API 路由
+components/      React 界面组件
+hooks/           客户端状态和交互 hooks
+lib/             会话、智能体、模型、文件、Git 和安全逻辑
+public/          静态资源和 PWA 文件
+bin/             npm CLI 入口及启动参数解析
+docs/            面向用户和贡献者的专题文档
+demo/            发布到 GitHub Pages 的静态演示站（见 demo/README.md）
 ```
 app/
   api/

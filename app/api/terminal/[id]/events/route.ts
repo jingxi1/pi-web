@@ -1,88 +1,84 @@
-import { getTerminal, readScrollback, subscribeTerminal } from "@/lib/terminal-manager";
+import { hasTerminal, subscribeTerminal, type TerminalEvent } from "@/lib/terminal-manager";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-const HEARTBEAT_MS = 30_000;
-const REPLAY_CHUNK_BYTES = 16 * 1024;
-
-function encode(obj: unknown): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(obj)}\n\n`);
-}
-
-/** GET — SSE live terminal stream with historical scrollback replay. */
 export async function GET(
-  _req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const t = getTerminal(id);
-  if (!t) {
-    return new Response(
-      `data: ${JSON.stringify({ error: "Terminal not found" })}\n\n`,
-      { status: 404, headers: SSE_HEADERS }
-    );
-  }
+  if (!hasTerminal(id)) return new Response("Terminal not found", { status: 404 });
+  const cursor = req.headers.get("last-event-id") ?? new URL(req.url).searchParams.get("after");
+  const after = cursor !== null && /^\d+$/.test(cursor) && Number.isSafeInteger(Number(cursor))
+    ? Number(cursor) : undefined;
 
-  const scrollback = readScrollback(id);
-  const controller = new AbortController();
+  let closeStream: (closeController: boolean) => void = () => {};
   const stream = new ReadableStream<Uint8Array>({
-    start: (c) => {
-      c.enqueue(encode({ type: "connected", id }));
-
-      // Replay historical scrollback in bounded chunks, then mark the boundary.
-      const cursor = [0];
-      while (cursor[0] < scrollback.length) {
-        const end = Math.min(scrollback.length, cursor[0] + REPLAY_CHUNK_BYTES);
-        c.enqueue(encode({ type: "data", data: scrollback.slice(cursor[0], end), replay: true }));
-        cursor[0] = end;
-      }
-      c.enqueue(encode({ type: "replay_end" }));
-
-      // If the process already exited before we connected, report it after replay.
-      if (t.exited) {
-        c.enqueue(encode({ type: "exit", exitCode: t.exitCode ?? null }));
-        c.close();
-        controller.abort();
+    start(controller) {
+      const encoder = new TextEncoder();
+      let closed = false;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+      let unsubscribe: (() => void) | null = null;
+      const cleanup = (closeController: boolean) => {
+        if (closed) return;
+        closed = true;
+        if (heartbeat) clearInterval(heartbeat);
+        unsubscribe?.();
+        req.signal.removeEventListener("abort", abort);
+        if (closeController) {
+          try { controller.close(); } catch { /* already closed */ }
+        }
+      };
+      const abort = () => cleanup(true);
+      const send = (event: TerminalEvent) => {
+        if (closed) return;
+        try {
+          if ((controller.desiredSize ?? 0) <= 0) {
+            cleanup(true);
+            return;
+          }
+          const eventId = event.type === "output" ? `id: ${event.offset}\n` : "";
+          controller.enqueue(encoder.encode(`${eventId}data: ${JSON.stringify(event)}\n\n`));
+          if (event.type === "exit" || event.type === "closed") cleanup(true);
+        } catch {
+          cleanup(false);
+        }
+      };
+      closeStream = cleanup;
+      const subscription = subscribeTerminal(id, send, after);
+      if (!subscription) {
+        cleanup(true);
         return;
       }
-
-      const off = subscribeTerminal(id, (event) => {
-        if (c.desiredSize == null) return;
-        if (event.type === "data") {
-          c.enqueue(encode({ type: "data", data: event.data ?? "" }));
-        } else if (event.type === "exit") {
-          c.enqueue(encode({ type: "exit", exitCode: event.exitCode ?? null }));
-          c.close();
-        }
-      });
-
-      const heartbeat = setInterval(() => {
+      unsubscribe = subscription.unsubscribe;
+      controller.enqueue(encoder.encode(":\n\n"));
+      send(subscription.output);
+      if (subscription.exited) send({ type: "exit", exitCode: subscription.exitCode ?? 0 });
+      if (closed) return;
+      req.signal.addEventListener("abort", abort, { once: true });
+      if (req.signal.aborted) {
+        abort();
+        return;
+      }
+      heartbeat = setInterval(() => {
         try {
-          c.enqueue(new TextEncoder().encode(": keepalive\n\n"));
-        } catch {
-          // client gone; cleanup below
-        }
-      }, HEARTBEAT_MS);
-
-      controller.signal.addEventListener("abort", () => {
-        clearInterval(heartbeat);
-        off();
-        try {
-          c.close();
-        } catch {
-          // already closed
-        }
-      });
+          if ((controller.desiredSize ?? 0) <= 0) cleanup(true);
+          else if (!closed) controller.enqueue(encoder.encode(":\n\n"));
+        } catch { cleanup(false); }
+      }, 30_000);
     },
-    cancel: () => controller.abort(),
+    cancel() {
+      closeStream(false);
+    },
+  }, { highWaterMark: 256 * 1024, size: (chunk) => chunk.byteLength });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
   });
-
-  return new Response(stream, { headers: SSE_HEADERS });
 }
-
-const SSE_HEADERS: Record<string, string> = {
-  "Content-Type": "text/event-stream",
-  "Cache-Control": "no-cache, no-transform",
-  Connection: "keep-alive",
-  "X-Accel-Buffering": "no",
-};

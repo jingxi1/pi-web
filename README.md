@@ -4,7 +4,9 @@
 
 Local web UI for the [pi coding agent](https://github.com/badlogic/pi-mono). Pi Web reads your local pi session files and gives you a browser workspace for session browsing, real-time chat, model configuration, skill management, and project file preview.
 
-![Pi Web shows the same pi session with structured Markdown, tool calls, and project navigation beside the CLI](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
+**[Try the interactive demo →](https://agegr.github.io/pi-web/)** The real Pi Web UI runs entirely in your browser, with sample sessions, files and models. There is nothing to install; replies are pre-written and no model is called.
+
+![Pi Web displaying a pi session with structured Markdown, tool calls, and project navigation](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
 
 The same pi session in CLI and Pi Web: structured tool calls, readable Markdown, session browsing, and cleaner results.
 
@@ -27,7 +29,22 @@ pi-web
 
 Then open [http://127.0.0.1:30141](http://127.0.0.1:30141). The CLI will try to open the browser automatically after the server is ready. Pi Web listens on `127.0.0.1` by default.
 
-**Options:**
+## Configuration
+
+For port and hostname, command-line options override the corresponding environment variables. Either `--no-open` or `PI_WEB_NO_OPEN=1` disables automatic browser opening. Run `pi-web --help` (or `-h`) to print startup options and exit without starting the server. Unknown options exit with an error.
+
+| Option or environment variable | Purpose | Default |
+| --- | --- | --- |
+| `--help`, `-h` | Print startup options and exit | — |
+| `--port <port>`, `-p <port>`, or `PORT` | Server port | `30141` |
+| `--hostname <host>`, `-H <host>`, or `PI_WEB_HOSTNAME` | Bind hostname | `127.0.0.1` |
+| `--no-open` or `PI_WEB_NO_OPEN=1` | Do not open a browser automatically | Browser opens |
+| `PI_WEB_SKIP_VERSION_CHECK=1` | Disable Pi Web update checks | Unset |
+| `PI_WEB_ALLOWED_HOSTS` | Additional exact proxy or custom hostnames, comma-separated | Unset |
+| `PI_WEB_PASSWORD` | Enable browser password login; API clients may use Basic Auth with username `pi` | Authentication disabled |
+| `PI_WEB_IDLE_TIMEOUT_MS` | Session idle timeout in milliseconds, up to `2147483647`; `0` disables idle shutdown; invalid or out-of-range values use the default | `600000` (10 min) |
+
+For example:
 
 ```bash
 pi-web --port 8080              # custom port
@@ -49,7 +66,11 @@ API requests accept loopback names, IP literals, the selected bind hostname, and
 
 ## HTTP Proxy
 
-Pi Web reads the standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables for server-side model and API requests.
+Password authentication does not encrypt the connection. Do not expose Pi Web over plain HTTP to the internet; use HTTPS through a trusted reverse proxy or a trusted VPN. If a reverse proxy sends an external hostname, add that exact name to `PI_WEB_ALLOWED_HOSTS`. This allow-list does not change the address Pi Web binds to.
+
+### HTTP Proxy
+
+Server-side model and API requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables.
 
 On macOS or Linux:
 
@@ -89,6 +110,30 @@ npx @agegr/pi-web@latest
 - **Forks vs in-session branches**: Fork creates a new `.jsonl` file. "Edit from here" creates another branch inside the same session file.
 - **Internationalization**: see [Internationalization](./docs/i18n.md) for using translations and adding languages or UI text.
 
+### Extension Session Liveness
+
+Server-side Pi extensions with detached work can prevent automatic idle
+session eviction through the versioned global registry:
+
+```js
+const liveness = globalThis[Symbol.for("@agegr/pi-web/session-liveness/v1")];
+const release = liveness?.version === 1
+  ? liveness.register({
+      name: "my-extension",
+      sessionId,
+      sessionFile: sessionFile || undefined,
+      isActive: () => detachedJobs.size > 0,
+    })
+  : () => {};
+```
+
+Register once per active extension session and call the returned idempotent
+`release` function on session shutdown, replacement, or reload. `isActive`
+must be synchronous, cheap, and scoped to the supplied exact session id or
+file. Provider errors fail safe by preserving that session. This lease only
+affects automatic idle eviction; explicit shutdown and Stop fallback cleanup
+still take precedence.
+
 ## Development
 
 ```bash
@@ -110,46 +155,12 @@ Avoid running `next build` / `npm run build` during local development. It writes
 ## Project Structure
 
 ```text
-app/
-  api/
-    agent/          # creates/drives AgentSession and exposes SSE events
-    auth/           # OAuth and API key management
-    cwd/browse/     # browsable server directory listing
-    cwd/validate/   # custom working directory validation
-    default-cwd/    # pi default working directory lookup
-    files/          # file listing, reading, preview, and watching
-    home/           # current user home directory
-    models/         # available models, default model, thinking levels
-    models-config/  # read/write models.json and test models
-    sessions/       # session reads, rename, delete, context, HTML export
-    skills/         # skill listing, search, install, enable/disable
-components/
-  AppShell.tsx        # main layout, URL state, top panels, file tabs
-  SessionSidebar.tsx  # project selector, session tree, Explorer
-  DirectoryPicker.tsx # browsable and editable working-directory picker
-  ChatWindow.tsx      # messages, SSE, image drag/drop, minimap
-  ChatInput.tsx       # input bar, model/tools/thinking/compact/slash controls
-  MessageView.tsx     # message, thinking, tool call/result rendering
-  ModelsConfig.tsx    # model and auth configuration panel
-  SkillsConfig.tsx    # skill management panel
-  FileExplorer.tsx    # file tree
-  FileViewer.tsx      # source, diff, image, audio, PDF, DOCX preview
-lib/
-  directory-browser.ts # directory normalization and safe listing helpers
-  http-dispatcher.ts  # HTTP(S) proxy setup for server-side fetch
-  rpc-manager.ts      # AgentSessionWrapper lifecycle and global registry
-  session-reader.ts   # parses .jsonl session files and branch contexts
-  normalize.ts        # normalizes toolCall field names
-  file-access.ts      # file read safety boundary
-  file-paths.ts       # path encoding and relative path helpers
-  markdown.ts         # Markdown/Mermaid/KaTeX plugin configuration
-  pi-types.ts         # pi-related types
-hooks/
-  useAgentSession.ts  # session loading, command sending, SSE state machine
-  useAudio.ts         # completion sound
-  useDragDrop.ts      # image drag/drop
-  useTheme.ts         # theme switching
-bin/
-  pi-web.js           # npm CLI entrypoint
-instrumentation.ts    # initializes the server HTTP dispatcher
+app/             Next.js UI and API routes
+components/      React UI components
+hooks/           Client state and interaction hooks
+lib/             Session, agent, model, file, Git, and security logic
+public/          Static assets and PWA files
+bin/             npm CLI entrypoint and launch option parsing
+docs/            Focused user and contributor guides
+demo/            Static browser demo published to GitHub Pages (see demo/README.md)
 ```
